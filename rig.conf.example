@@ -1,0 +1,26 @@
+# AgenticBench rig: operator configuration. Copy to rig.conf (git-ignored) and edit. Every value below is a fictional example.
+# bench/unit.sh reads rig.conf from the repository root, or the file named by RIG_CONF.
+
+# Model provider for third-party-backend harnesses. The harness talks plain HTTP to the rig's capture proxy with a random
+# dummy key; the proxy swaps in your key and forwards over HTTPS to MODEL_UPSTREAM. The key file stays outside the repo and
+# is mounted read-only into the proxy container only, never into a harness container.
+MODEL_KEYFILE=/path/outside/the/repo/model-api-key
+MODEL_UPSTREAM=api.model-provider.example
+MODEL_ID=example-model-1
+MODEL_OPENAI_PATH=/v1               # OpenAI-compatible base path on the upstream (chat completions; Responses API for Codex)
+MODEL_ANTHROPIC_PATH=/anthropic     # Anthropic-compatible base path on the upstream (Claude Code only)
+
+# Vendor-hosted harnesses (amp, auggie): the model is served by the harness vendor and a logged-in account is needed.
+#   <harness>_MODEL_RE   regex on host+path matching that harness's model requests in the capture (required to run it)
+#   <harness>_CRED_FILE  your credential file; read by you, piped into the container and copied into its in-memory HOME only
+#                        (default: the same path under your own HOME as the harness uses in the container)
+#amp_MODEL_RE='^model\.vendor-a\.example/api/'
+#amp_CRED_FILE=/path/to/your/credential.json
+#auggie_MODEL_RE='^api\.vendor-b\.example/model'
+
+# Optional safety block, OFF by default. Apart from the fixed QUIC rule (UDP 443 is rejected for every harness so that traffic
+# falls back to inspectable TCP, see METHOD.md), the rig never blocks or alters a harness's traffic unless you set this.
+#   <harness>_BLOCK      regex on host+path; matching requests are answered 503 locally, captured and never forwarded.
+# Use it only to keep test data out of your real account. It changes what is measured: the rule is written to each
+# unit's run.json and must be reported with any result that used it.
+#amp_BLOCK='^files\.vendor-a\.example/'

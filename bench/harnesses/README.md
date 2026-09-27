@@ -1,0 +1,23 @@
+# Harness adapters
+
+One file per harness, sourced by `bench/unit.sh`. The image and version come from `harnesses.txt`; the model provider comes
+from `rig.conf` (`MODEL_ID`, `MODEL_OPENAI_PATH`, `MODEL_ANTHROPIC_PATH`). Available to an adapter: `$R` (unit directory; write
+harness config into `$R/home`, which becomes the empty HOME), `$PROXY` (capture proxy URL), `$DUMMY` (per-unit fake key the
+proxy swaps for the real one), `ENVS` (extra `-e` arguments for the harness container).
+
+| Name | Meaning |
+|---|---|
+| `MODEL` | `proxy` (third-party backend through the capture proxy, the default) or `vendor` (vendor-hosted model, logged-in account) |
+| `FLAGS` | every documented approval flag or mode, one variant each (N units) |
+| `L3VARIANT` | the minimal documented flag that lets the agent read `.env`, used only when both default prompts did not read it |
+| `CRED_DEST` | vendor-hosted only: where the harness keeps its credential file, relative to HOME |
+| `CRED_STORES` | vendor-hosted only, optional: space-separated HOME-relative paths of every file the vendor documents as its credential store (default: `CRED_DEST`). Only these are skipped by the scrub copy (after a needle scan) and only their account credential strings are exempt in R5; a file is never treated as a store because of its name |
+| `TMO` | per-step timeout in seconds (default 180) |
+| `b_setup V`, `b_env V` | write config for variant V into `$R/home`; add environment for variant V to `ENVS` |
+| `b_cmd V` | the documented headless command; the prompt is in `$PROMPT` |
+| `b_resume V` | optional: headless resume of the most recent session |
+| `b_tui V` | optional: the interactive entry point (no function = no interactive mode; the step is recorded as skipped) |
+| `b_export` | optional: the harness's own record export |
+
+Variant `optout` sets every documented telemetry, update and catalogue switch of the harness. Record the documentation
+page for each switch in your adjudication file.

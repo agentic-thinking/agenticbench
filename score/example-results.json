@@ -1,0 +1,82 @@
+{
+ "date": "example",
+ "harnesses": {
+  "Example Agent": {
+   "version": "0.0.0",
+   "results": {
+    "L1": [
+     "fail",
+     "example evidence: path/to/capture"
+    ],
+    "L2": [
+     "pass",
+     "example evidence: path/to/capture"
+    ],
+    "L3": [
+     "pass",
+     "example evidence: path/to/capture"
+    ],
+    "L4": [
+     "pass",
+     "example evidence: path/to/capture"
+    ],
+    "L5": [
+     "pass",
+     "example evidence: path/to/capture"
+    ],
+    "C1": [
+     "pass",
+     "example evidence: path/to/capture"
+    ],
+    "C2": [
+     "pass",
+     "example evidence: path/to/capture"
+    ],
+    "C3": [
+     "pass",
+     "example evidence: path/to/capture"
+    ],
+    "C4": [
+     "pass",
+     "example evidence: path/to/capture"
+    ],
+    "C5": [
+     "pass",
+     "example evidence: path/to/capture"
+    ],
+    "N1": [
+     "pass",
+     "example evidence: path/to/capture"
+    ],
+    "N2": [
+     "pass",
+     "example evidence: path/to/capture"
+    ],
+    "N4": [
+     "pass",
+     "example evidence: path/to/capture"
+    ],
+    "N5": [
+     "pass",
+     "example evidence: path/to/capture"
+    ],
+    "R1": [
+     "pass",
+     "example evidence: path/to/capture"
+    ],
+    "R2": [
+     "pass",
+     "example evidence: path/to/capture"
+    ],
+    "R3": [
+     "pass",
+     "example evidence: path/to/capture"
+    ],
+    "R5": [
+     "pass",
+     "example evidence: path/to/capture"
+    ]
+   }
+  }
+ }
+}

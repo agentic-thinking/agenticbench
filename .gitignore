@@ -1,0 +1,15 @@
+# Local inputs and run outputs. Never commit keys, the lab CA, captures, or your own adjudication.
+rig.conf
+keys/
+*.key
+ca/
+build/
+results/
+**/results/
+bench/digest/
+bench/docs/
+bench/adjudication.json
+bench/scores-input.json
+score/out/
+__pycache__/
+*.pyc

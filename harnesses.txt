@@ -1,0 +1,16 @@
+# Harness versions under test: one line per harness. build.sh builds agenticbench-<name>:<version> from the vendor's
+# official channel; bench/unit.sh runs that image. Pin the versions you test and publish them with any result.
+# name   kind      package or URL                                                                                   version                 executable
+claude   npm       @anthropic-ai/claude-code                                                                        2.1.283                 claude
+codex    npm       @openai/codex                                                                                    0.157.1                 codex
+amp      npm       @sourcegraph/amp                                                                                 0.0.1790424028-ge9aad5  amp
+auggie   npm       @augmentcode/auggie                                                                              0.36.0                  auggie
+kilo     npm       @kilocode/cli                                                                                    7.8.1                   kilo
+qwen     npm       @qwen-code/qwen-code                                                                             0.24.6                  qwen
+kimi     npm       @moonshot-ai/kimi-code                                                                           2.1.1                   kimi
+cline    npm       cline                                                                                            3.0.65                  cline
+opencode npm       opencode-ai                                                                                      1.18.32                 opencode
+pi       npm       @earendil-works/pi-coding-agent                                                                  0.87.1                  pi
+goose    tar       https://github.com/aaif-goose/goose/releases/download/v1.52.0/goose-x86_64-unknown-linux-gnu.tar.bz2 1.52.0              goose
+aider    pypi      aider-chat                                                                                       0.86.2                  aider
+zcode    appimage  https://cdn-zcode.z.ai/zcode/electron/releases/3.14.3/linux-x64/ZCode-3.14.3-linux-x64.AppImage  0.16.9                  zcode
