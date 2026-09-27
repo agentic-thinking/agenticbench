@@ -80,6 +80,18 @@ class ScoreBenchTests(unittest.TestCase):
             self.assertEqual(h["results"][t][0], "nt")         # template placeholders stay nt
         self.assertEqual(h["info"]["I4"][0], "not adjudicated")   # a marker reaching the model is not yet "no": the warning is checked by hand
 
+    def test_disclosure_modes_pass_through(self):
+        adj = copy.deepcopy(ADJ); adj["fx"].update(disclosure="1 Jan", vendor="Fixture Vendor")
+        h = run(digest(), adj)["harnesses"]["Fixture Agent"]
+        self.assertEqual((h["results"], h["info"], h["disclosure"]), ({}, {}, "1 Jan"))     # default: withheld
+        adj["fx"]["mode"] = "held"; adj["fx"]["cells"]["C2"] = ["pending", "held finding"]
+        o = run(digest(), adj); h = o["harnesses"]["Fixture Agent"]
+        self.assertEqual((h["mode"], h["results"]["C2"][0], h["results"]["L1"][0], h["info"]), ("held", "pending", "pass", {}))
+        score.validate(TESTS, o)
+        sc = score.score(TESTS, o)["Fixture Agent"]
+        self.assertEqual(sc["results"]["C2"], ["pending", ""])
+        self.assertEqual(sum(score.outcome_counts(sc, 18)), 18)
+
     def test_missing_capture_is_never_a_pass(self):
         d = digest(); d["units"][0]["capture"]["mitm"] = False
         r = run(d)["harnesses"]["Fixture Agent"]["results"]

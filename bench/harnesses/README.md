@@ -20,5 +20,14 @@ proxy swaps for the real one), `ENVS` (extra `-e` arguments for the harness cont
 | `b_tui V` | optional: the interactive entry point (no function = no interactive mode; the step is recorded as skipped) |
 | `b_export` | optional: the harness's own record export |
 
+Kinds in `harnesses.txt`: `npm`, `pypi` (package at the pinned version), `tar`, `appimage`, `gz` (a downloaded release file; an
+optional sixth column gives its sha256, required for `gz`) and `dockerfile` (a directory in this repository whose Dockerfile builds
+the image, for vendor installers: `docker/hermes`). `python3 -m unittest test_adapters` (from `bench/`) checks every row and adapter
+offline.
+
+A variant not in `FLAGS` is not in the batch plan; run it with `bench/unit.sh HARNESS VARIANT STEP...` as an extra unit
+(`hermes quiet`, `openclaw local`). A harness that documents no headless resume keeps `b_resume` as a step that prints that and
+exits non-zero (`dsh`, `openclaw`).
+
 Variant `optout` sets every documented telemetry, update and catalogue switch of the harness. Record the documentation
 page for each switch in your adjudication file.

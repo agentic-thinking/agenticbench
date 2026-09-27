@@ -15,15 +15,16 @@ A pass describes one measured run within the implemented procedure. Read [KNOWN-
 | `THREAT-MODEL.md` | Whose side the tests take and how each data flow is classed |
 | `CHARTER.md`, `DISCLOSURE.md` | Governance and vendor disclosure policy |
 | `score/tests.json` | The test definitions (v0.2); METHOD.md and the code follow it |
-| `harnesses.txt` | Harness versions under test, and where each comes from |
+| `harnesses.txt` | Harness versions under test, where each comes from, and the sha256 of downloaded files where pinned |
 | `rig.conf.example` | Operator configuration: model provider, vendor-hosted harness settings, optional safety block |
-| `build.sh`, `docker/` | Builds every image (base, tools, mitm, one per harness) and creates the lab CA |
+| `build.sh`, `docker/` | Builds every image (base, tools, mitm, one per harness; `docker/hermes/` for the one harness installed by a vendor script) and creates the lab CA |
 | `bench/unit.sh`, `bench/batch.sh` | One test unit; the full unit list of METHOD.md for one or more harnesses |
-| `bench/harnesses/` | One adapter per harness: headless command, opt-out switches, approval flags (see its README) |
+| `bench/harnesses/`, `bench/test_adapters.py` | One adapter per harness (17: aider, amp, auggie, claude, cline, codex, dsh, goose, grok, hermes, kilo, kimi, openclaw, opencode, pi, qwen, zcode): headless command, opt-out switches, approval flags (see its README); and their offline self-test |
 | `bench/analyse_all.sh`, `bench/analyse_unit.py`, `bench/digest.py` | Mechanical facts from the captures |
 | `bench/adjudication.example.json`, `bench/adjudication_init.py` | Template and starter for the hand-checked inputs |
 | `bench/score_bench.py`, `bench/test_score_bench.py`, `bench/test_evidence_model.py` | Captures plus adjudication to per-test results (the input of `score/score.py`), and its tests |
 | `bench/view.py`, `bench/r1check.py`, `bench/recdump.py`, `bench/snapshot_doc.sh` | Adjudication helpers |
+| `bench/export_evidence.py`, `bench/test_export_evidence.py` | Public evidence bundle per agent (verdicts, reasons, scrubbed supporting records; held cells omitted; fails closed), and its tests |
 | `lab/` | Capture proxy, canary workspace generator, credential scrubber |
 | `score/` | Scorer and chart: `score.py`, `test_score.py`, `example-results.json` (fictional) |
 
@@ -33,6 +34,7 @@ A pass describes one measured run within the implemented procedure. Read [KNOWN-
 - Python 3.10 or newer with `brotli` and `zstandard` for full L2 decoding on the scoring host (Debian/Ubuntu packages `python3-brotli` and `python3-zstandard`; missing comparison decoders force nt for affected bodies), `curl`, and about 3 GB of disk for the shared images plus 0.5 to 2 GB per harness image.
 - An API key for a model provider with an OpenAI-compatible API (chat completions; Codex also needs the Responses API). Claude Code also needs an Anthropic-compatible endpoint from the same provider. Keep the key in a file outside this repository. It is mounted read-only into the capture proxy container only; the harness holds a random dummy key that the proxy swaps for the real one.
 - Vendor-hosted harnesses (`amp`, `auggie`) need your own logged-in account; see `rig.conf.example`.
+- DeepSeek Harness (`dsh`) talks only to the DeepSeek API: set `MODEL_UPSTREAM` to it (or a compatible API) when you test it.
 
 ## Run one agent end to end
 

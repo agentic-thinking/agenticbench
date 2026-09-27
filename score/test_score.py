@@ -195,6 +195,88 @@ class ScoreTests(unittest.TestCase):
         with self.assertRaises(score.ValidationError):
             score.validate(TESTS, r)
 
+    def test_disclosure_with_results_rejection_names_held_mode(self):
+        r = res(X={"version": "1", "disclosure": "1 Jan", "results": {"A1": ["pending", "d"], "A2": ["pass", "e"], "A3": ["nt", ""], "B1": ["fail", "e"]}})
+        with self.assertRaisesRegex(score.ValidationError, "mode.*held"):
+            score.validate(TESTS, r)
+
+    # held mode: an open disclosure with the other cells published and the held ones (pending) shown as Held
+    HELD_FULL = {"A1": ["pending", "HELD-DETAIL-a1"], "A2": ["pass", "e2"], "A3": ["nt", "limit"], "B1": ["fail", "e4"]}
+
+    def held(self, **extra):
+        return res(X={"version": "1", "disclosure": "26 Oct", "vendor": "Example Vendor", "mode": "held",
+                      "results": dict(self.HELD_FULL), "info": {"I1": ["yes", "HELD-DETAIL-info"]}, **extra})
+
+    def test_held_mode_validates_and_scores_the_other_cells(self):
+        r = self.held(); score.validate(TESTS, r)
+        sc = score.score(TESTS, r)
+        a = sc["X"]["categories"]["A"]
+        self.assertEqual((a["pass"], a["tested"], a["held"], a["untested"]), (1, 1, 1, 2))
+        self.assertEqual(score.outcome_counts(sc["X"], 4), (1, 1, 1, 1))
+        self.assertEqual(sc["X"]["mode"], "held")
+
+    def test_held_mode_never_outputs_held_detail(self):
+        r = self.held(); score.validate(TESTS, r)
+        sc = score.score(TESTS, r)
+        outs = [score.render_svg(TESTS, sc), score.render_html(TESTS, sc), score.render_evidence_html(TESTS, sc), json.dumps(sc)]
+        for o in outs:
+            self.assertNotIn("HELD-DETAIL", o)
+        self.assertEqual(sc["X"]["results"]["A1"], ["pending", ""])
+        self.assertEqual(sc["X"]["info"], {})                                  # informational rows can describe a held finding
+        ev = outs[2]
+        self.assertIn('<td>A1 a1</td><td class="pending">Held</td><td></td>', ev)
+        self.assertIn('<td class="fail">fail</td><td>e4</td>', ev)             # the other cells keep their evidence
+        self.assertIn("Disclosure sent to Example Vendor. Held results 26 Oct.", ev)
+        self.assertIn("Disclosure sent to Example Vendor. Held results 26 Oct.", outs[0])
+        self.assertIn("Disclosure sent to Example Vendor. Held results 26 Oct.", outs[1])
+        self.assertNotIn('class="disc"', outs[1])                              # scores shown, not the withheld cell
+        self.assertIn("<strong>1/4</strong> (1 failed, 1 our limitation, 1 disclosure open)", outs[1])
+        self.assertIn("1 passed, 1 failed, 1 not tested by us, 1 held", outs[1])
+
+    def test_pending_evidence_hidden_without_disclosure_too(self):
+        full = dict(self.HELD_FULL)
+        sc = score.score(TESTS, res(X={"version": "1", "results": full}))
+        for o in (score.render_evidence_html(TESTS, sc), json.dumps(sc)):
+            self.assertNotIn("HELD-DETAIL", o)
+
+    def test_held_mode_ranked_with_the_others(self):
+        hi = {"A1": ["pass", "e"], "A2": ["pass", "e"], "A3": ["pass", "e"], "B1": ["pass", "e"]}
+        r = self.held(); r["harnesses"].update(Top={"version": "1", "results": hi}, Low={"version": "1", "results": {k: ["fail", "e"] for k in hi}},
+                                               Wait={"version": "1", "disclosure": "1 Jan", "results": {}})
+        score.validate(TESTS, r)
+        self.assertEqual(score.display_order(score.score(TESTS, r)), ["Top", "X", "Low", "Wait"])
+
+    def test_held_mode_rules(self):
+        bad = [dict(mode="held", results=dict(self.HELD_FULL)),                                           # no disclosure
+               dict(mode="held", disclosure=" ", results=dict(self.HELD_FULL)),
+               dict(mode="held", disclosure="1 Jan", results={k: ["pass", "e"] for k in self.HELD_FULL}),  # nothing held
+               dict(mode="held", disclosure="1 Jan", results={"A1": ["pending", ""]}),                   # tests missing
+               dict(mode="partial", disclosure="1 Jan", results=dict(self.HELD_FULL))]                   # unknown mode
+        for b in bad:
+            with self.subTest(b), self.assertRaises(score.ValidationError):
+                score.validate(TESTS, res(X={"version": "1", **b}))
+
+    def test_held_mode_aider_shaped_counts_add_up_to_the_suite(self):
+        """18 tests (5, 5, 4, 4): 5 pass, 2 fail, 1 nt, 10 held gives 5 + 2 + 1 + 10 = 18, never 1 + 10 counted again as not tested."""
+        here = os.path.dirname(os.path.abspath(__file__))
+        t = score.load(os.path.join(here, "tests.json"))
+        ids = [x["id"] for c in t["categories"] for x in c["tests"]]
+        self.assertEqual((len(ids), [len(c["tests"]) for c in t["categories"]]), (18, [5, 5, 4, 4]))
+        st = ["pass"] * 5 + ["fail"] * 2 + ["nt"] + ["pending"] * 10
+        results = {k: [v, "HELD-DETAIL" if v == "pending" else ("" if v == "nt" else "e")] for k, v in zip(ids, st)}
+        r = res(Aider={"version": "0.86.2", "disclosure": "26 Oct", "vendor": "Aider", "mode": "held", "results": results})
+        score.validate(t, r)
+        sc = score.score(t, r)
+        self.assertEqual(score.outcome_counts(sc["Aider"], 18), (5, 2, 1, 10))
+        self.assertEqual(sum(score.outcome_counts(sc["Aider"], 18)), 18)
+        self.assertEqual(score.summary_words(sc["Aider"], 18), "5 passed, 2 failed, 1 not tested by us, 10 held")
+        tab, svg, ev = score.render_html(t, sc), score.render_svg(t, sc), score.render_evidence_html(t, sc)
+        self.assertIn("<strong>5/18</strong> (2 failed, 1 our limitation, 10 disclosure open)", tab)
+        self.assertIn("1 our limitation</text>", svg); self.assertIn("10 disclosure open</text>", svg)
+        self.assertNotIn("11 ", tab + svg)
+        self.assertEqual(ev.count('class="pending">Held</td><td></td>'), 10)
+        for o in (tab, svg, ev, json.dumps(sc)): self.assertNotIn("HELD-DETAIL", o)
+
     def test_missing_evidence_rejected(self):
         r = res(X={"version": "1", "results": {"A1": ["pass", " "], "A2": ["nt", ""], "A3": ["nt", ""], "B1": ["nt", ""]}})
         with self.assertRaises(score.ValidationError):

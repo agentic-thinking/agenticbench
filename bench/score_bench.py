@@ -618,9 +618,10 @@ def main(argv=None):
             if unknown: raise ScoreError(f"{h}: cells for unknown test ids {unknown} in the adjudication file")
             for t in ids: R.setdefault(t, ["nt", f"{PLACEHOLDER} yet (no cell in the adjudication file)"])
             entry = {"version": hh.main["version"], "tested": fmt_date(hh.main.get("started") or "") or "unknown", "results": R, "info": I}
-            for k in ("note", "disclosure", "vendor"):
+            for k in ("note", "disclosure", "vendor", "mode"):
                 if hh.A.get(k): entry[k] = hh.A[k]
-            if hh.A.get("disclosure"): entry["results"], entry["info"] = {}, {}
+            if hh.A.get("mode") == "held": entry["info"] = {}   # held mode (score.py): the other cells are published, never the info rows
+            elif hh.A.get("disclosure"): entry["results"], entry["info"] = {}, {}
             out["harnesses"][hh.A.get("name") or h] = entry
     except ScoreError as e:
         print(f"error: {e}", file=sys.stderr); return 2
