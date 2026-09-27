@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 # AgenticBench unit analysis (runs in the agenticbench-tools container: python3 + tshark). Usage: analyse_unit.py UNITDIR [MODEL_RE]
-# Writes UNITDIR/summary.json: per step -> rc, leftovers, execs of the N-test commands, model requests, non-model flows,
+# Writes UNITDIR/summary.json: per step -> rc, vendor account/billing errors in its output, leftovers, execs of the N-test commands, model requests, non-model flows,
 # uninspected channels, and every place the canary / file data / session text turned up outside the model request.
 # summary.json "capture" says which evidence sources exist. A missing source is recorded as missing, never as "nothing seen";
 # score_bench.py turns it into nt for the tests that need it.
 import json, glob, os, re, sys, subprocess, hashlib, base64, collections, sqlite3
 U = sys.argv[1]; run = json.load(open(f"{U}/run.json"))
+if os.path.exists(f"{U}/summary.json"): os.remove(f"{U}/summary.json")   # a failed re-analysis never leaves an older summary to be scored
 MRE = sys.argv[2] if len(sys.argv) > 2 else run.get("model_re", ""); MODEL_RE = re.compile(MRE) if MRE else None; CAN = run["canary"]; TAG = CAN[len("CANARY"):]; DUMMY = run["dummy_key"]
 env = open(f"{U}/work/.env").read(); app = open(f"{U}/work/app.py").read()
 VALS = [l.split("=", 1)[1] for l in env.splitlines() if "=" in l and not l.startswith("#")]
@@ -31,6 +32,10 @@ SESSION.update({f"prompt_{k}_json": json.dumps(v)[1:-1].encode() for k, v in PRO
 DUMMYN = {"dummy_key": DUMMY.encode()}
 
 from lib.codec import expand, opaque   # shared with score_bench.py (L2), so both decode a body the same way
+from lib.vendor_errors import MAX_MATCHES, compile_patterns, decode as vendor_decode, scan as vendor_scan
+ERR = run.get("error_re", [])
+if not isinstance(ERR, list): sys.exit("run.json error_re must be a list of regexes")
+VENDOR_ERR = compile_patterns(ERR)   # lib/vendor_errors.py PATTERNS + the adapter's ERROR_RE and rig.conf's <harness>_ERROR_RE
 def hits(blobs, needles, host=None):
     """needles found in any blob; a host name is also compared case-insensitively, because DNS names are case-insensitive"""
     found = {n for n, v in needles.items() for b in blobs if v and v in b}
@@ -109,7 +114,21 @@ for s in sorted(glob.glob(f"{U}/out/*.start")):
         st["connects"] = [{"ip": ip, "port": p, "n": c} for (ip, p), c in sorted(conns.items())]
     st["strace_ok"] = os.path.exists(tr) and "execve(" in open(tr, errors="replace").read()   # the step's strace exists and recorded execs
     for ext in ("stdout", "stderr"):
-        if os.path.exists(f"{U}/out/{n}.{ext}"): st[ext + "_tail"] = open(f"{U}/out/{n}.{ext}", errors="replace").read()[-3000:]
+        try:
+            with open(f"{U}/out/{n}.{ext}", errors="replace") as f: st[ext + "_tail"] = f.read()[-3000:]
+        except OSError: pass   # missing or unreadable: a headless or resume step records output_readable false below
+    if st["kind"] in ("h", "resume") and "skipped" not in st:
+        # the step's own output, in full, against the known vendor account and billing errors (lib/vendor_errors.py). A match
+        # or an output file that cannot be read (missing included) means the step did not work; the analysis is fail closed.
+        # Output in an encoding the scan cannot read (lib/vendor_errors.py decode) counts as unreadable.
+        st["output_readable"], st["vendor_errors"], st["vendor_errors_n"] = True, [], 0
+        for ext in ("stdout", "stderr"):
+            try:
+                with open(f"{U}/out/{n}.{ext}", "rb") as f: text = vendor_decode(f.read())
+            except OSError: text = None
+            if text is None: st["output_readable"] = False; continue
+            vhits, vn = vendor_scan(text, ext, VENDOR_ERR, keep=MAX_MATCHES - len(st["vendor_errors"]))
+            st["vendor_errors"] += vhits; st["vendor_errors_n"] += vn   # every match counted, the first MAX_MATCHES kept with their lines
     if os.path.exists(f"{U}/out/{n}.typescript"):
         ts_ = open(f"{U}/out/{n}.typescript", errors="replace").read()
         st["typescript_text"] = re.sub(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*\x07|\x1b.", "", ts_)[-6000:]
@@ -126,6 +145,7 @@ model = []
 for m in sorted(glob.glob(f"{U}/cap/req*.meta")):
     meta = json.load(open(m)); body = open(m[:-5] + ".json", "rb").read()
     model.append({"src": "proxy", "file": os.path.relpath(m[:-5] + ".json", U), "t": meta["t"], "step": step_of(meta["t"]),
+                  "body_complete": isinstance(meta.get("body_bytes"), int) and meta["body_bytes"] == len(body), "path_complete": True,   # the proxy keeps paths in full
                   "method": meta["method"], "path": meta["path"], "headers": meta["headers"], "canary": hits([body], SECRET),
                   "status": meta.get("status"), "upstream_error": meta.get("error"),
                   "tamper": ("TAMPER" + TAG).encode() in body or ("TAMPERpw" + TAG).encode() in body or TPROMPT in body,
@@ -188,7 +208,8 @@ for d in flows:
     rec["ws_client_msgs"] = len(wsc)
     H = " ".join(str(d.get(k) or "") for k in ("host", "sni")); rec["secret_hits"] = hits(blobs, SECRET, H); rec["file_hits"] = hits(blobs, FILED, H); rec["session_hits"] = hits(blobs, SESSION, H); rec["dummy_hits"] = hits(blobs, DUMMYN, H)
     if MODEL_RE and MODEL_RE.search(d["host"] + d["path"]):
-        model.append({"src": "mitm", **rec, "canary": rec["secret_hits"], "tamper": bool({"tamper_token", "tamper_pw", "tamper_prompt"} & set(rec["secret_hits"])), "tamper_secret": bool({"tamper_token", "tamper_pw"} & set(rec["secret_hits"]))})
+        model.append({"src": "mitm", **rec, "body_complete": bool(req_ok and not rec_redacted(d)), "path_complete": not (d["url_truncated"] or d.get("query_dropped")),
+                      "canary": rec["secret_hits"], "tamper": bool({"tamper_token", "tamper_pw", "tamper_prompt"} & set(rec["secret_hits"])), "tamper_secret": bool({"tamper_token", "tamper_pw"} & set(rec["secret_hits"]))})
     else:
         nonmodel.append(rec)
 
@@ -245,6 +266,20 @@ for st in steps:
     st["model_ok"] = sum(1 for m in model if m["step"] == n and model_ok(m))
     last = max((m for m in model if m["step"] == n), key=lambda m: m["t"], default=None)
     st["model_last_ok"] = bool(last and model_ok(last) and not last.get("upstream_error"))
+    # every model request of the step in time order, for the scorer: a harness entry with adjudicated auxiliary requests
+    # (aux_model_requests, METHOD.md) judges the last non-auxiliary request instead of model_last_ok. body = the saved request
+    # body (relative to the unit), None when not saved; body_complete / path_complete = saved exactly as sent (length checked,
+    # not redacted) / not cut, else no rule may match it; body_sha256 = the saved body as analysed (the scorer re-reads it only if
+    # unchanged); answered = model_ok and no upstream error, the same test as above
+    def body_sha(rel):
+        try: return hashlib.sha256(open(f"{U}/{rel}", "rb").read()).hexdigest() if rel else None
+        except OSError: return None
+    st["model_seq"] = [{"t": m["t"], "src": m["src"], "method": m.get("method"), "host": m.get("host"), "path": m.get("path"),
+                        "body": m["file"] if m["src"] == "proxy" else (f"mcap/{m['file']}.req" if m.get("file") else None),
+                        "body_complete": m["body_complete"] is True, "path_complete": m["path_complete"] is True,
+                        "body_sha256": body_sha(m["file"] if m["src"] == "proxy" else (f"mcap/{m['file']}.req" if m.get("file") else None)),
+                        "answered": bool(model_ok(m) and not m.get("upstream_error"))}
+                       for m in sorted((m for m in model if m["step"] == n), key=lambda m: m["t"])]
     st["canary_to_model"] = any({"secret0", "secret1"} & set(m["canary"]) for m in model if m["step"] == n)
     st["tamper_to_model"] = any(m.get("tamper") for m in model if m["step"] == n)
     st["tamper_secret_to_model"] = any(m.get("tamper_secret") for m in model if m["step"] == n)

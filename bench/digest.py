@@ -102,9 +102,10 @@ for u in units:
           "capture": u.get("capture", {}), "problems": u.get("problems", ["no problem record (analysed by an older analyse_unit.py)"]), "step": []}
     for s in u["steps"]:
         uu["step"].append({k: s.get(k) for k in ("name", "kind", "skipped", "rc", "outer_rc", "exec_date", "exec_ls", "exec_calc", "exec_sandbox",
-                                                 "nonmodel_hosts", "tls_failed", "passthrough", "other_port_connects", "model_requests", "model_ok", "model_last_ok",
+                                                 "nonmodel_hosts", "tls_failed", "passthrough", "other_port_connects", "model_requests", "model_ok", "model_last_ok", "model_seq",
                                                  "canary_to_model", "tamper_to_model", "tamper_secret_to_model", "leftover_missing",
-                                                 "strace_ok", "exec_failed_n", "exec_unresolved_n", "exec_ambiguous")}
+                                                 "strace_ok", "exec_failed_n", "exec_unresolved_n", "exec_ambiguous",
+                                                 "output_readable", "vendor_errors", "vendor_errors_n")}
                           | {"leftover": [l["cmd"][:120] for l in s.get("leftover", [])], "tamper": s.get("tamper")})
     uu["model_hosts"] = sorted({m["host"] for m in u["model_requests"] if m.get("src") == "mitm"})
     uu["nonmodel"] = [{k: f.get(k) for k in ("step", "host", "method", "path", "status", "req_bytes", "secret_hits", "file_hits", "session_hits", "dummy_hits", "file", "blocked", "body_uninspected", "upstream_error", "url_truncated", "redaction_incomparable", "payload_redacted", "ws_client_msgs", "payload_opaque")}

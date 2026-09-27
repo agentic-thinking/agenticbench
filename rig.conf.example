@@ -18,6 +18,12 @@ MODEL_ANTHROPIC_PATH=/anthropic     # Anthropic-compatible base path on the upst
 #amp_CRED_FILE=/path/to/your/credential.json
 #auggie_MODEL_RE='^api\.vendor-b\.example/model'
 
+# Vendor account and billing errors (optional, any harness). A headless or resume step whose stdout or stderr holds a known
+# vendor error (out of credits, quota exceeded, rate limit, plan does not allow the model, not logged in or session expired,
+# payment required) does not count as worked. The built-in list is bench/lib/vendor_errors.py; add harness-specific wording here.
+#   <harness>_ERROR_RE   case-insensitive regex, matched per line of the step's output; recorded in each unit's run.json
+#amp_ERROR_RE='keep using vendor-a'
+
 # Optional safety block, OFF by default. Apart from the fixed QUIC rule (UDP 443 is rejected for every harness so that traffic
 # falls back to inspectable TCP, see METHOD.md), the rig never blocks or alters a harness's traffic unless you set this.
 #   <harness>_BLOCK      regex on host+path; matching requests are answered 503 locally, captured and never forwarded.

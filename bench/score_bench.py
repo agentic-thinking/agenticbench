@@ -14,8 +14,8 @@ Usage:  score_bench.py [--adjudication FILE] OUT.json HARNESS...
 Output: {"date": ..., "harnesses": {name: {"version", "tested", "results": {test: [status, evidence]}, "info": {...}}}}
         which score/score.py reads with --results OUT.json.
 """
-import argparse, base64, collections, datetime, json, os, re, sys
-from lib.codec import AVAILABLE, MISSING, expand, opaque   # the analyser's decoders (L2 re-reads bodies)
+import argparse, base64, collections, datetime, hashlib, json, os, re, sys
+from lib.codec import AVAILABLE, DECODERS, MISSING, expand, opaque   # the analyser's decoders (L2 re-reads bodies)
 
 S = os.environ.get("AGENTICBENCH_BENCH_DIR") or os.path.dirname(os.path.abspath(__file__)); ROOT = os.path.dirname(S)   # override: tests only
 EV = "bench/"                                    # evidence paths are relative to the repository root
@@ -33,6 +33,32 @@ def rx_list(v):
     """adjudication lists hold either "regex" or ["regex", "documentation quote"]."""
     return [(x, "") if isinstance(x, str) else
             (x[0], x[1] if len(x) > 1 and isinstance(x[1], str) else "") for x in v or []]
+
+
+AUX_KEYS = {"path", "body", "evidence"}
+
+
+def aux_rules(a, h):
+    """aux_model_requests of an adjudication entry: [{"path": regex on the request path, "body": regex on the request body,
+    "evidence": quote or evidence of the request's purpose}]; path and/or body, both must match when both are given.
+    Absent or [] = no auxiliary requests. Anything else malformed (null included) is an error, never a silently ignored rule."""
+    if "aux_model_requests" not in a: return []
+    v = a["aux_model_requests"]
+    if not isinstance(v, list): raise ScoreError(f"{h}: aux_model_requests must be a list of rules")
+    out = []
+    for i, r in enumerate(v):
+        bad = f"{h}: aux_model_requests[{i}]"
+        if not isinstance(r, dict) or set(r) - AUX_KEYS: raise ScoreError(f"{bad}: a rule is an object with only path, body and evidence")
+        if not isinstance(r.get("evidence"), str) or not r["evidence"].strip(): raise ScoreError(f"{bad}: evidence of the request's purpose missing")
+        if not any(k in r for k in ("path", "body")): raise ScoreError(f"{bad}: a rule needs path and/or body")
+        rx = {}
+        for k in ("path", "body"):
+            if k not in r: continue
+            if not isinstance(r[k], str) or not r[k]: raise ScoreError(f"{bad}: {k} must be a non-empty regex")
+            try: rx[k] = re.compile(r[k].encode() if k == "body" else r[k])
+            except re.error as e: raise ScoreError(f"{bad}: {k} is not a valid regex ({e})")
+        out.append(rx)
+    return out
 
 
 def fmt_date(ts):
@@ -64,6 +90,9 @@ class Harness:
         # whole-unit accounting (METHOD.md, evidence invariant): payload and host tests read every non-model request of a unit,
         # whichever step window (or none) it fell in; only the A/B/C identifier comparison of L2 looks at step windows.
         self.dflt = [(self.main, None)] + ([(self.tui, None)] if self.tui else [])
+        # adjudicated auxiliary model requests (title, summary ...): excluded from the "worked" gate only (METHOD.md)
+        self.aux = aux_rules(self.A, h)
+        self.gate = {(u["dir"], st["name"]): self.turn_gate(u, st) for u in self.units for st in u["step"]} if self.aux else {}
 
     # ---- selection and evidence helpers
     def sel(self, variant=None, steps=None, pred=None):
@@ -100,11 +129,66 @@ class Harness:
         s = u["step"][0]
         return not s.get("skipped") and str(s.get("outer_rc")) == "0" and str(s.get("rc")) in ("124", "137")
 
+    def is_aux(self, u, m):
+        """a model request matches an adjudicated auxiliary rule. Only a request the capture kept exactly as sent can match any
+        rule: path not cut, body saved in full and not redacted (both flags, whatever field the rule reads), and the saved body
+        readable here with the hash the analysis recorded; anything else (including an older analysis without the flags, or a
+        body changed after analysis) stays a turn request. A body rule reads
+        the saved body and its whole-body decompression."""
+        if m.get("path_complete") is not True or m.get("body_complete") is not True or not isinstance(m.get("body"), str): return False
+        try: b = open(f"{ROOT}/{EV}{u['dir']}/{m['body']}", "rb").read()
+        except OSError: return False
+        if not isinstance(m.get("body_sha256"), str) or hashlib.sha256(b).hexdigest() != m["body_sha256"]: return False
+        body = [b]
+        for _, f in DECODERS:
+            try: body.append(f(b)); break
+            except Exception: pass
+        for rx in self.aux:
+            if "path" in rx and not rx["path"].search(m.get("path") or ""): continue
+            if "body" in rx and not any(rx["body"].search(x) for x in body): continue
+            return True
+        return False
+
+    def turn_gate(self, u, s):
+        """(answered, last answered) over the step's non-auxiliary model requests. Fails closed: a step whose requests are
+        not all listed, or whose every request an auxiliary rule matches, is an error."""
+        seq, n = s.get("model_seq"), s.get("model_requests") or 0
+        if not isinstance(seq, list) or len(seq) != n:
+            if not n and seq is None: return 0, False
+            raise ScoreError(f"{self.h}: {self.rel(u)} {s['name']}: aux_model_requests needs the per-request list (model_seq) of every step; re-run analyse_all.sh")
+        turn = [m for m in seq if not self.is_aux(u, m)]
+        if seq and not turn:
+            raise ScoreError(f"{self.h}: {self.rel(u)} {s['name']}: aux_model_requests match every model request of the step; a rule this broad cannot be right")
+        last_t = max((m["t"] for m in turn), default=None)
+        return sum(1 for m in turn if m.get("answered") is True), bool(turn) and all(m.get("answered") is True for m in turn if m["t"] == last_t)
+
+    def model_gate(self, u, s):
+        """(answered model requests, last model request answered): all requests, or the non-auxiliary ones when the entry has
+        aux_model_requests. Auxiliary requests are still captured and scanned by every payload test."""
+        if not self.aux: return s.get("model_ok"), s.get("model_last_ok")
+        return self.gate[(u["dir"], s["name"])]
+
+    @staticmethod
+    def output_error(s):
+        """why the step's own output bars it from counting as worked, or None: a known vendor account or billing error in its
+        stdout or stderr (lib/vendor_errors.py, with the matched line), or output the analysis could not read or did not scan
+        (an older analysis included). Fail closed."""
+        v = s.get("vendor_errors")
+        if s.get("output_readable") is not True or not isinstance(v, list):
+            return f"out/{s.get('name')}.stdout or .stderr unreadable or not scanned for vendor errors (re-run analyse_all.sh -f)"
+        if v: return f"vendor account or billing error ({v[0].get('pattern')}) in out/{s.get('name')}.{v[0].get('stream')} line {v[0].get('line_no')}: {v[0].get('line')}"
+        return None
+
     def worked(self, u, st):
         """the step worked: the harness exited 0 (no timeout), made at least one model request answered with a 2xx status,
-        and its last model request was answered with a 2xx status too (no failure after a first success)."""
+        and its last model request was answered with a 2xx status too (no failure after a first success), and its stdout and
+        stderr were read in full and hold no known vendor account or billing error (output_error). With adjudicated
+        auxiliary requests (aux_model_requests) the model conditions apply to the non-auxiliary requests only."""
         s = next((x for x in u["step"] if x["name"] == st), None)
-        return bool(s and not s.get("skipped") and str(s.get("outer_rc")) == "0" and s.get("model_ok") and s.get("model_last_ok") and str(s.get("rc")) == "0")
+        if not s: return False
+        ok, last_ok = self.model_gate(u, s)
+        return bool(not s.get("skipped") and str(s.get("outer_rc")) == "0" and ok and last_ok and str(s.get("rc")) == "0"
+                    and self.output_error(s) is None)
 
     @staticmethod
     def unit_problem(u):
@@ -114,12 +198,14 @@ class Harness:
     def checked_refusal(self, u, s):
         return (f"{u['variant']}|{s['name']}" in self.A.get("refused", []) and
                 not s.get("skipped") and str(s.get("outer_rc")) == "0" and s.get("rc") is not None and
-                s.get("model_ok") and s.get("model_last_ok") and s.get("strace_ok") is True and s.get("exec_ambiguous") == [])
+                s.get("model_ok") and s.get("model_last_ok") and s.get("strace_ok") is True and s.get("exec_ambiguous") == []
+                and self.output_error(s) is None)   # a vendor error (out of credits ...) that ran nothing is not a refusal
 
     def run_problem(self, pairs):
         """reason the default evidence cannot be used, or None."""
         if not self.sA: return f"{self.rel(self.main)}: step A (h:env) missing"
         if not self.worked(self.main, self.sAn):
+            if self.output_error(self.sA): return f"{self.rel(self.main)}: step A did not work: {self.output_error(self.sA)}"
             return f"{self.rel(self.main)}: step A did not work (exit code, or no successful model request; out/{self.sAn}.rc, .stderr, cap/)"
         if not self.tui and not self.tui_skipped: return "idle-boot unit (default tui) missing"
         if self.tui and not self.booted(self.tui): return f"{self.rel(self.tui)}: the idle boot did not stay up for its 20 s (exit code {self.tui['step'][0]['rc']}; out/01-tui.typescript)"
@@ -408,6 +494,9 @@ class Harness:
         elif self.opt and self.tele_reqs([(u, None) for u in self.opt])[0]:   # a captured positive is a fail even when an opt-out unit is incomplete
             t = self.tele_reqs([(u, None) for u in self.opt])[0]; u, f = t[0]
             R["C3"] = ["fail", f"{self.rel(u)} (opt-out: {label}, unit incomplete): {f['method']} {f['host']}{f['path'][:60]} still sent"]
+        elif R["C1"][0] == "pass" and self.opt and self.tele_reqs([(u, None) for u in self.opt])[1]:   # never a pass over unknown opt-out traffic
+            R["C3"] = ["nt", "an opt-out unit is incomplete or did not work, and unclassified or uninspected requests remain in the opt-out units: "
+                       + ", ".join(self.tele_reqs([(u, None) for u in self.opt])[1][:5])]
         elif R["C1"][0] == "pass": R["C3"] = ["pass", "no telemetry in the default runs, so nothing to opt out of (missing-risk rule); no telemetry captured in any opt-out unit"]
         elif not opt_env: R["C3"] = ["nt", "no opt-out unit was run (batch.sh runs optout h:env and optout tui)"]
         else: R["C3"] = ["nt", "an opt-out unit is missing, did not work (headless: exit code or no successful model request; idle boot: did not stay up) or its capture is incomplete"]

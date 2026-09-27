@@ -47,7 +47,9 @@ class DigestBatch(unittest.TestCase):
         self.unit("fx-2", "b2", False)
         r = self.digest("b1")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual(json.load(open(os.path.join(self.tmp, "digest", "fx.json")))["batch"], "b1")
+        dg = json.load(open(os.path.join(self.tmp, "digest", "fx.json")))
+        self.assertEqual(dg["batch"], "b1")
+        self.assertEqual(dg["units"][0]["step"][0]["model_seq"], [])   # the per-request list reaches the scorer (aux_model_requests)
 
     def test_named_batch_must_be_complete(self):
         self.unit("fx-1", "b2", True); self.unit("fx-2", "b2", False)

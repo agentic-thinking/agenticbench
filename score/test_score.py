@@ -66,11 +66,11 @@ class ScoreTests(unittest.TestCase):
         self.assertIn('<text class="t" x="10" y="80" font-weight="600">X</text>', svg)   # a note does not move the row: equal scores sort by name
         self.assertIn(f'<text class="d" x="170" y="110">{esc}</text>', svg)   # under X's bars (row y 70), before Y (row y 124)
         self.assertIn('<text class="t" x="10" y="134" font-weight="600">Y</text>', svg)
-        self.assertIn('viewBox="0 0 608 218"', svg)
+        self.assertIn('viewBox="0 0 638 232"', svg)
         self.assertIn(f'<td>X<br><span class="note">{esc}</span></td>', tab)
         self.assertEqual(svg.count(esc), 1)
         no_note = score.render_svg(TESTS, score.score(TESTS, res(X={"version": "1", "results": full})))
-        self.assertIn('viewBox="0 0 608 164"', no_note)
+        self.assertIn('viewBox="0 0 638 178"', no_note)
         for bad in ("", " ", 5):
             with self.assertRaises(score.ValidationError):
                 score.validate(TESTS, res(X={"version": "1", "results": full, "note": bad}))
@@ -107,8 +107,8 @@ class ScoreTests(unittest.TestCase):
         self.assertEqual(score.overall(sc["X"]), (2, 3))
         self.assertEqual(score.overall_fixed(sc["X"], 4), (2, 4, 1, 1))
         self.assertIn(">2/4</text>", score.render_svg(TESTS, sc))
-        self.assertIn("1 failed · 1 n/a", score.render_svg(TESTS, sc))
-        self.assertIn("<strong>2/4</strong> (1 failed, 1 n/a)", score.render_html(TESTS, sc))
+        self.assertIn('1 failed</tspan> · 1 our limitation</text>', score.render_svg(TESTS, sc))
+        self.assertIn("<strong>2/4</strong> (1 failed, 1 our limitation)", score.render_html(TESTS, sc))
 
     def test_conflict_of_interest_on_outputs(self):
         full = {"A1": ["pass", "e"], "A2": ["pass", "e"], "A3": ["pass", "e"], "B1": ["pass", "e"]}
@@ -116,11 +116,58 @@ class ScoreTests(unittest.TestCase):
         self.assertIn("AgentProtect", score.render_svg(TESTS, sc))
         self.assertIn("AgentProtect", score.render_html(TESTS, sc))
 
+    def test_not_tested_and_held_wording(self):
+        """The two non-scored outcomes are labelled "Not tested by us" (our limitation) and "Held" (disclosure open)."""
+        full = {"A1": ["pending", "d"], "A2": ["fail", "e"], "A3": ["nt", ""], "B1": ["pass", "e"]}
+        r = res(X={"version": "1", "results": full})
+        sc = score.score(TESTS, r)
+        svg, tab = score.render_svg(TESTS, sc), score.render_html(TESTS, sc)
+        self.assertIn(f"{score.NOT_TESTED} ({score.NOT_TESTED_NOTE})", svg)
+        self.assertIn(f"{score.HELD} ({score.HELD_NOTE})", svg)
+        self.assertIn("1 failed</tspan> · 1 our limitation</text>", svg)       # held is not also counted as not tested
+        self.assertIn(f'style="fill:{score.GOLD}">1 disclosure open</text>', svg)
+        self.assertIn("Key: Not tested by us (grey) = our limitation; Held (gold) = disclosure open. Bars show passes only.", svg)
+        self.assertNotIn('<rect x="170" y="44"', svg)                          # no legend swatch in a bar colour
+        self.assertIn("Missing safeguards count as failures.", svg)
+        self.assertIn("Grey text Not tested by us", svg); self.assertIn("Gold text Held", svg)
+        self.assertIn("(1 failed, 1 our limitation, 1 disclosure open)", tab)
+        self.assertIn("1 passed, 1 failed, 1 not tested by us, 1 held", tab)
+        self.assertEqual(r["harnesses"]["X"]["results"], full)                   # status values in the data are unchanged
+        self.assertEqual([sc["X"]["results"][k][0] for k in ("A1", "A3")], ["pending", "nt"])
+
+    def test_overall_column_text_fits(self):
+        """every line in the overall column fits its width at the chart's monospace size (about 6.5 px per character)"""
+        import re as _re
+        worst = {"A1": ["pending", "d"], "A2": ["fail", "e"], "A3": ["nt", ""], "B1": ["na", "e"]}
+        many = {"A1": ["fail", "e"], "A2": ["fail", "e"], "A3": ["fail", "e"], "B1": ["fail", "e"]}
+        svg = score.render_svg(TESTS, score.score(TESTS, res(X={"version": "1", "results": worst}, Y={"version": "1", "results": many})))
+        width = int(_re.search(r'viewBox="0 0 (\d+) ', svg).group(1)); ox = int(_re.search(r'<text class="h" x="(\d+)" y="31">PASSED', svg).group(1))
+        lines = [_re.sub(r"<[^>]+>", "", m.group(1)) for m in _re.finditer(rf'<text [^>]*x="{ox}"[^>]*>(.*?)</text>', svg)]
+        self.assertTrue(any("our limitation" in x for x in lines) and any("disclosure open" in x for x in lines), lines)
+        wide = "18 failed · 18 our limitation"   # the widest sub-line an 18-test suite can produce
+        for x in lines + [wide]: self.assertLessEqual(len(x) * 6.5, width - ox - 5, x)
+
+    def test_summary_words(self):
+        full = {"A1": ["pending", "d"], "A2": ["fail", "e"], "A3": ["nt", ""], "B1": ["pass", "e"]}
+        sc = score.score(TESTS, res(X={"version": "1", "results": full}))
+        self.assertEqual(score.summary_words(sc["X"], 4), "1 passed, 1 failed, 1 not tested by us, 1 held")
+        self.assertEqual(sum(score.outcome_counts(sc["X"], 4)), 4)              # the four outcomes add up to the suite
+        plain = {"A1": ["pass", "e"], "A2": ["pass", "e"], "A3": ["na", "e"], "B1": ["fail", "e"]}
+        sc2 = score.score(TESTS, res(Y={"version": "1", "results": plain}))
+        self.assertEqual(score.summary_words(sc2["Y"], 4), "2 passed, 1 failed, 1 not tested by us")   # na is not tested by us too
+        self.assertIn("2 passed, 1 failed, 1 not tested by us", score.render_html(TESTS, sc2))
+
+    def test_evidence_page_uses_the_labels(self):
+        full = {"A1": ["pending", "d"], "A2": ["na", "old"], "A3": ["nt", "limit"], "B1": ["pass", "e"]}
+        ev = score.render_evidence_html(TESTS, score.score(TESTS, res(X={"version": "1", "results": full})))
+        self.assertIn('<td class="pending">Held</td>', ev); self.assertIn('<td class="nt">Not tested by us</td>', ev)
+        self.assertIn('<td class="na">Not tested by us</td>', ev); self.assertIn('<td class="pass">pass</td>', ev)
+
     def test_untested_agent_is_not_labelled_held(self):
         nt = {"A1": ["nt", ""], "A2": ["nt", ""], "A3": ["nt", ""], "B1": ["nt", ""]}
         sc = score.score(TESTS, res(X={"version": "1", "results": nt}, Y={"version": "1", "disclosure": "1 Jan", "results": {}}))
         tab = score.render_html(TESTS, sc)
-        self.assertIn("<strong>0/4</strong> (0 failed, 4 n/a)", tab)
+        self.assertIn("<strong>0/4</strong> (0 failed, 4 our limitation)", tab)
         self.assertEqual(tab.count('class="pending">Held<'), 1)          # only the agent with an open disclosure
         self.assertIn(">0/4</text>", score.render_svg(TESTS, sc))
 

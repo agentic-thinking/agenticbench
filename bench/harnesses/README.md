@@ -13,6 +13,7 @@ proxy swaps for the real one), `ENVS` (extra `-e` arguments for the harness cont
 | `CRED_DEST` | vendor-hosted only: where the harness keeps its credential file, relative to HOME |
 | `CRED_STORES` | vendor-hosted only, optional: space-separated HOME-relative paths of every file the vendor documents as its credential store (default: `CRED_DEST`). Only these are skipped by the scrub copy (after a needle scan) and only their account credential strings are exempt in R5; a file is never treated as a store because of its name |
 | `TMO` | per-step timeout in seconds (default 180) |
+| `ERROR_RE` | optional: a case-insensitive regex for this harness's own account or billing error wording, added to the built-in list in `bench/lib/vendor_errors.py` (and to `<harness>_ERROR_RE` from `rig.conf`). A headless or resume step whose stdout or stderr matches does not count as worked |
 | `b_setup V`, `b_env V` | write config for variant V into `$R/home`; add environment for variant V to `ENVS` |
 | `b_cmd V` | the documented headless command; the prompt is in `$PROMPT` |
 | `b_resume V` | optional: headless resume of the most recent session |

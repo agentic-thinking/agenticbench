@@ -21,7 +21,7 @@ Agentic Thinking owns AgentProtect, commercial software for governing AI agents 
 - Tests are yes or no questions about observable behaviour, each with a written procedure and evidence rule (`METHOD.md`), and are mapped to a published threat model (`THREAT-MODEL.md`).
 - Where a vendor documents a behaviour, the test asks whether the agent behaves as documented, not whether we like the design. A documented auto-approve mode that runs commands is not a failure.
 - Data sent to the model provider the user chose is not scored as a leak; it is reported.
-- Every agent is scored out of the same 18 tests. A missing safeguard counts as a fail; n/a covers only our own test limits and results held while a disclosure to the vendor is open. The chart is ordered by tests passed, then fewest failures; it is not a certification.
+- Every agent is scored out of the same 18 tests. A missing safeguard counts as a fail; "Not tested by us" covers only our own test limits, and "Held" covers results held while a disclosure to the vendor is open. The chart is ordered by tests passed, then fewest failures; it is not a certification.
 - Changes to tests or thresholds are proposed in the open, take effect in a new version, and are applied to all agents at once. Old results stay published under the version they were scored with, or are re-scored from the same captures and marked as such.
 
 ## 4. Money
