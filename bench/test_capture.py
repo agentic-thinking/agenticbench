@@ -511,6 +511,57 @@ class UnitScript(unittest.TestCase):
         self.assertIn("access.py /tmp /out/tmp-files.txt", self.src); self.assertIn("listing.py /tmp /out/tmp-listing.json /out/tmp-files.txt --own", self.src)
 
 
+    def test_run_json_takes_operator_values_through_the_environment(self):
+        """Astra review: a rig.conf regex or model name holding quotes broke the run.json Python source, and its exit status was
+        unchecked. The values now go through the environment, and a failed write stops the unit."""
+        s = self.src.index('ERROR_RES="$ERROR_RES" RJ_BLOCK='); e = self.src.index("\nEOF\n", s) + 5
+        self.assertIn('<<EOF || { echo "could not write $R/run.json" >&2; exit 1; }', self.src[s:e])
+        t = tempfile.mkdtemp(prefix="abrj-"); self.addCleanup(shutil.rmtree, t, True)
+        odd = "^a\'\'\'b\"\"\"c\\\\d$x`y`"
+        pre = "ERROR_RES='[]'; H=h; V=v; STEPS=(h:date); VERSION=1; IMAGE=i; IMAGE_ID=x; CANARY=c; DUMMY=d; PXIP=; NSIP=; L3VARIANT=; FLAGS=; NOBODY=; CRED_DEST=; CRED_STORES=; ENVS=()\n"
+        for model in ("vendor", "proxy"):
+            with self.subTest(model):
+                body = pre + f'R={t}; MODEL={model}; MODEL_ID="$ODD"; VENDOR_MODEL="$ODD"; BLOCK="$ODD"; STREAM="$ODD"; MODEL_RE="$ODD"\n' + self.src[s:e]
+                r = subprocess.run(["bash", "-c", body], capture_output=True, text=True, env={"PATH": os.environ["PATH"], "ODD": odd})
+                self.assertEqual(r.returncode, 0, r.stderr)
+                j = json.load(open(f"{t}/run.json"))
+                for k in ("model_id", "mitm_block", "mitm_stream", "model_re"): self.assertEqual(j[k], odd, k)
+
+
+class StreamCheck(unittest.TestCase):
+    """bench/stream_check.py: a streamed flow without its final record, or with request bytes forwarded after it, is a unit problem."""
+    def run_check(self, streams, flows=None):
+        t = tempfile.mkdtemp(prefix="abst-"); self.addCleanup(shutil.rmtree, t, True)
+        open(f"{t}/streams.jsonl", "w").write("".join(x if isinstance(x, str) else json.dumps(x) + "\n" for x in streams))
+        if flows is not None: open(f"{t}/flows.jsonl", "w").write("".join(json.dumps(x) + "\n" for x in flows))
+        return subprocess.run([sys.executable, os.path.join(HERE, "stream_check.py"), t], capture_output=True, text=True)
+
+    def test_complete(self):
+        r = self.run_check([{"stream_open": True, "flow_id": "f1"}, {"capture_ended_stream": True, "flow_id": "f1"},
+                            {"dropped_request_bytes": 9, "flow_id": "f1"}], [{"streamed": True, "flow_id": "f1"}, {"flow_id": "f2"}])
+        self.assertEqual((r.returncode, r.stdout), (0, ""))
+
+    def test_missing_final_record(self):
+        r = self.run_check([{"stream_open": True, "flow_id": "f1"}, {"stream_open": True, "flow_id": "f2"}], [{"streamed": True, "flow_id": "f1"}])
+        self.assertEqual(r.returncode, 1); self.assertIn("f2", r.stdout); self.assertNotIn("f1", r.stdout)
+        self.assertEqual(self.run_check([{"stream_open": True, "flow_id": "f1"}]).returncode, 1)          # no flows.jsonl at all
+        self.assertEqual(self.run_check([{"stream_open": True}], [{"streamed": True}]).returncode, 1)      # no flow id
+
+    def test_late_request_bytes(self):
+        r = self.run_check([{"stream_open": True, "flow_id": "f1"}, {"late_request_bytes": 42, "side": "req", "flow_id": "f1"}],
+                           [{"streamed": True, "flow_id": "f1"}])
+        self.assertEqual(r.returncode, 1); self.assertIn("42 request bytes", r.stdout)
+
+    def test_unreadable_fails_closed(self):
+        self.assertEqual(self.run_check([{"stream_open": True, "flow_id": "f1"}, "not json\n"], [{"streamed": True, "flow_id": "f1"}]).returncode, 2)
+        self.assertEqual(self.run_check(["[1]\n"], []).returncode, 2)
+
+    def test_unit_records_a_problem(self):
+        src = open(os.path.join(HERE, "unit.sh")).read()
+        self.assertIn('python3 "$S/stream_check.py" "$R/mcap" > "$R/out/stream-check.txt" 2>&1 || problem', src)
+        self.assertLess(src.index('docker rm -f "$NS" "$PX"'), src.index('stream_check.py'))     # after the capture has stopped
+
+
 class CounterOrder(unittest.TestCase):
     def test_owner_counters_read_after_harness_and_capture_stop(self):
         """the uid-1000 multicast counter must cover the whole capture: read after the harness container is removed and tcpdump

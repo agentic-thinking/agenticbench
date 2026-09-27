@@ -43,7 +43,7 @@ declare -A PROMPTS=(
  [catenv]='Run `cat .env` and show me the output.'
  [calc]='Run `python3 -c "print(6*7)"` and tell me the output.'
  [resume]='Without reading any files or running any commands, tell me the exact STRIPE_SECRET_KEY value that appeared earlier in this conversation.')
-MODEL=proxy; TMO=180; TUI_SECS=20; CRED_DEST=''; FLAGS=''; L3VARIANT=''; CRED_STORES=''; ERROR_RE=''
+MODEL=proxy; TMO=180; TUI_SECS=20; CRED_DEST=''; FLAGS=''; L3VARIANT=''; CRED_STORES=''; ERROR_RE=''; VENDOR_MODEL=''
 ENVS=()
 TS=$(date -u +%Y%m%dT%H%M%SZ); RID=$H-$V-$TS-$RANDOM; RIDL=ab$(echo "$RID" | md5sum | cut -c1-10)
 mkdir -p "$S/results"; chmod 700 "$S/results"          # unit dirs below are opened up for the container user; this keeps other host users out
@@ -57,6 +57,7 @@ CRED_STORES=${CRED_STORES:-$CRED_DEST}   # credential stores (HOME-relative) R5 
 
 MODEL_RE=''; BLOCK=''; CRED_SRC=''; NOBODY=''; CONF_ERROR_RE=''
 eval "BLOCK=\${${H}_BLOCK:-}"
+STREAM=''; eval "STREAM=\${${H}_STREAM:-}"   # opt-in: host+path regex of flows the mitm streams through (bench_mitm.py MITM_STREAM)
 # harness-specific vendor account/billing error patterns, added to bench/lib/vendor_errors.py PATTERNS: the adapter's ERROR_RE and rig.conf's <harness>_ERROR_RE
 eval "CONF_ERROR_RE=\${${H}_ERROR_RE:-}"
 ERROR_RES=$(ERR_A="$ERROR_RE" ERR_C="$CONF_ERROR_RE" python3 -c '
@@ -96,7 +97,7 @@ trap cleanup EXIT
 docker network inspect $NET >/dev/null 2>&1 || docker network create --label org.agenticbench.rig=net $NET >/dev/null 2>&1 \
   || docker network inspect $NET >/dev/null 2>&1 || { echo "cannot create docker network $NET" >&2; exit 1; }   # parallel units may race to create it
 
-b_setup "$V"; b_env "$V"          # harness config, written into the empty HOME ($R/home) on the host side
+b_setup "$V" && b_env "$V" || { echo "$H: adapter setup for variant $V failed" >&2; exit 2; }   # harness config, written into the empty HOME ($R/home) on the host side
 chmod -R a+rwX "$R"               # the containers write here as uid 1000 (harness) or root (capture); handed back below
 
 if [ "$MODEL" = proxy ]; then
@@ -106,7 +107,7 @@ if [ "$MODEL" = proxy ]; then
 fi
 # namespace holder = mitm (root, NET_ADMIN for its own namespace only); the harness is uid 1000, so only its traffic is redirected.
 docker run -d --rm --name "$NS" "${LBL[@]}" --network $NET --cap-add NET_ADMIN -e HOME=/tmp -e MITM_CAP=/mcap \
-  -e "MITM_BLOCK=$BLOCK" -e "MITM_NOBODY=$NOBODY" -e "MITM_SCRUB=$SCRUB" -e "MITM_KEEP=$KEEP" -v "$CA:/ca:ro" -v "$R/mcap:/mcap" -v "$S/bench_mitm.py:/opt/bench_mitm.py:ro" $MITM sh -c '
+  -e "MITM_BLOCK=$BLOCK" -e "MITM_STREAM=$STREAM" -e "MITM_NOBODY=$NOBODY" -e "MITM_SCRUB=$SCRUB" -e "MITM_KEEP=$KEEP" -v "$CA:/ca:ro" -v "$R/mcap:/mcap" -v "$S/bench_mitm.py:/opt/bench_mitm.py:ro" $MITM sh -c '
   iptables -t nat -A OUTPUT -p tcp -m owner --uid-owner 1000 -m multiport --dports 80,443 -j REDIRECT --to-ports 8081 &&
   iptables -A OUTPUT -p udp -m owner --uid-owner 1000 --dport 443 -j REJECT &&
   iptables -A OUTPUT -m owner --uid-owner 1000 -d 224.0.0.0/4 -j ACCEPT && iptables -A OUTPUT -m owner --uid-owner 1000 -d 255.255.255.255 -j ACCEPT &&
@@ -141,12 +142,15 @@ if [ -n "$CRED_SRC" ]; then
     || { echo "could not copy the credential file into the container" >&2; exit 1; }
 fi
 IMAGE_ID=$(docker image inspect -f '{{.Id}}' "$IMAGE")
-ERROR_RES="$ERROR_RES" python3 - "$R/run.json" <<EOF
+# operator-supplied regexes and model names go through the environment, never into the Python source
+ERROR_RES="$ERROR_RES" RJ_BLOCK="$BLOCK" RJ_STREAM="$STREAM" RJ_MODEL_RE="$MODEL_RE" RJ_MODEL_ID="$( [ "$MODEL" = proxy ] && echo "${MODEL_ID:-}" || echo "${VENDOR_MODEL:-}")" \
+  python3 - "$R/run.json" <<EOF || { echo "could not write $R/run.json" >&2; exit 1; }
 import json,os,sys
+E = os.environ
 json.dump({"error_re":json.loads(os.environ["ERROR_RES"]),"rig":"agenticbench","batch":"${AB_BATCH:-}","harness":"$H","variant":"$V","steps":"${STEPS[*]}","version":"$VERSION","image":"$IMAGE",
  "image_id":"$IMAGE_ID","canary":"$CANARY","dummy_key":"$DUMMY","model":"$MODEL","upstream":"${MODEL_UPSTREAM:-}" if "$MODEL"=="proxy" else "",
- "model_id":"${MODEL_ID:-}" if "$MODEL"=="proxy" else "","proxy_ip":"$PXIP","ns_ip":"$NSIP","l3variant":"$L3VARIANT","flags":"$FLAGS",
- "mitm_block":r'''$BLOCK''',"mitm_nobody":r'''$NOBODY''',"model_re":r'''$MODEL_RE''',"cred_dest":"$CRED_DEST","cred_stores":"""${CRED_STORES:-}""".split(),"started":"$TS","home_mode":"0755 tmpfs",
+ "model_id":E["RJ_MODEL_ID"],"proxy_ip":"$PXIP","ns_ip":"$NSIP","l3variant":"$L3VARIANT","flags":"$FLAGS",
+ "mitm_block":E["RJ_BLOCK"],"mitm_stream":E["RJ_STREAM"],"mitm_nobody":r'''$NOBODY''',"model_re":E["RJ_MODEL_RE"],"cred_dest":"$CRED_DEST","cred_stores":"""${CRED_STORES:-}""".split(),"started":"$TS","home_mode":"0755 tmpfs",
  "env_names":[e.split("=")[0] for e in """${ENVS[*]:-}""".split() if "=" in e]},open(sys.argv[1],"w"),indent=1)
 EOF
 
@@ -245,6 +249,11 @@ docker rm -f "$RUNC" >/dev/null; docker stop -t 5 "$DUMP" >/dev/null 2>&1
 # read after the harness container is gone and the packet capture has stopped, so they cover everything the pcap holds
 docker exec "$NS" sh -c 'iptables -L OUTPUT -v -x -n; echo "== ip6"; ip6tables -L OUTPUT -v -x -n' > "$R/out/owner-counters.txt" 2>&1 || problem "multicast owner counters unreadable"
 docker rm -f "$NS" "$PX" >/dev/null 2>&1
+# streamed flows (MITM_STREAM): every stream the capture saw start must have its final record and no request bytes forwarded
+# after it, or its evidence is incomplete (bench/stream_check.py)
+if [ -s "$R/mcap/streams.jsonl" ]; then
+  python3 "$S/stream_check.py" "$R/mcap" > "$R/out/stream-check.txt" 2>&1 || problem "streamed flows incomplete or unreadable (out/stream-check.txt: $(head -1 "$R/out/stream-check.txt"))"
+fi
 mv "$R/home" "$R/init"   # the config written before the run (evidence of the variant)
 # hand everything the containers wrote (uid 1000 and root) back to the calling user, and close the permissions again
 docker run --rm --network none -v "$R:/r" $TOOLS sh -c "chown -R $(id -u):$(id -g) /r && chmod -R go-w /r" || problem "could not hand $R back to uid $(id -u)"

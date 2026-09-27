@@ -1,8 +1,10 @@
 # Harness versions under test: one line per harness. build.sh builds agenticbench-<name>:<version> from the vendor's
 # official channel; bench/unit.sh runs that image. Pin the versions you test and publish them with any result.
-# Optional sixth column, for the kinds that download a file (tar, appimage, gz): the sha256 of that file; the build fails when it
-# differs. Kind gz requires it. Kind dockerfile: the package column is a directory in this repository whose Dockerfile builds the
-# image (vendor installers that need more than one step); that Dockerfile pins its own sources and hashes.
+# Optional sixth column, for the kinds that download a file (tar, appimage, gz, targz): the sha256 of that file; the build fails when
+# it differs. Kinds gz and targz require it. Kind dockerfile: the package column is a directory in this repository whose Dockerfile builds the
+# image (vendor installers that need more than one step); that Dockerfile pins its own sources and hashes. Kind uv: a Python tool
+# installed with uv into its own managed CPython; the package column is the main package, then optional "+"-joined extras, each
+# pinned pkg==ver, installed alongside it.
 # name   kind      package or URL                                                                                   version                 executable  sha256
 claude   npm       @anthropic-ai/claude-code                                                                        2.1.283                 claude
 codex    npm       @openai/codex                                                                                    0.157.1                 codex
@@ -21,3 +23,7 @@ dsh      npm       @deepseek-ai/dsh                                             
 openclaw npm       openclaw                                                                                         2026.9.6                openclaw
 hermes   dockerfile docker/hermes                                                                                   0.21.5                  hermes
 grok     gz        https://x.ai/cli/grok-1.0.41-linux-x86_64.gz                                                     1.0.41                  grok        994114d7a4bf7a6cf459975d4e92f0c449ae6ccfaf2a35a69203db08f00bcd02
+openhands uv     openhands                                                                                         1.16.0                  openhands
+pydanticai uv    clai+pydantic-ai-harness[coder]==0.36.0+pydantic-ai==2.51.0                                       2.51.0                  clai
+gemini   npm       @google/gemini-cli                                                                               0.61.0                  gemini
+cursor   targz     https://downloads.cursor.com/lab/2026.09.26-dd393fe/linux/x64/agent-cli-package.tar.gz          2026.09.26-dd393fe      cursor-agent 8085fd120f5c71f4eae7fea26a043718e5644e3071e4fab3220a0e58c51f9593

@@ -10,13 +10,26 @@ MODEL_ID=example-model-1
 MODEL_OPENAI_PATH=/v1               # OpenAI-compatible base path on the upstream (chat completions; Responses API for Codex)
 MODEL_ANTHROPIC_PATH=/anthropic     # Anthropic-compatible base path on the upstream (Claude Code only)
 
-# Vendor-hosted harnesses (amp, auggie): the model is served by the harness vendor and a logged-in account is needed.
+# Vendor-hosted harnesses (amp, auggie, cursor, gemini): the model is served by the harness vendor and your own account is needed.
 #   <harness>_MODEL_RE   regex on host+path matching that harness's model requests in the capture (required to run it)
 #   <harness>_CRED_FILE  your credential file; read by you, piped into the container and copied into its in-memory HOME only
 #                        (default: the same path under your own HOME as the harness uses in the container)
 #amp_MODEL_RE='^model\.vendor-a\.example/api/'
 #amp_CRED_FILE=/path/to/your/credential.json
 #auggie_MODEL_RE='^api\.vendor-b\.example/model'
+#   <harness>_MODEL_ID   the model the adapter selects explicitly (cursor, gemini; see the adapter for its default), recorded in run.json
+#   <harness>_STREAM     opt-in, regex on host+path: flows the capture streams through instead of buffering (bidirectional
+#                        streams, needed by cursor; see METHOD.md), recorded in run.json
+#cursor_MODEL_RE='^agent\.vendor-c\.example/agent\.v1\.AgentService/'
+#cursor_STREAM='^agent\.vendor-c\.example/agent\.v1\.AgentService/'
+#cursor_CRED_FILE=/path/to/your/cursor/auth.json
+#cursor_MODEL_ID=example-model-1
+# Gemini CLI keeps a key entered in its own dialog encrypted per host, so the rig reads your own API key from a JSON file you
+# prepare outside the repository (mode 600): {"GEMINI_API_KEY": "..."}. It is copied into the in-memory HOME and read into the
+# environment per step, never put on a command line.
+#gemini_MODEL_RE='^api\.vendor-d\.example/'
+#gemini_CRED_FILE=/path/outside/the/repo/gemini-key.json
+#gemini_MODEL_ID=example-model-1
 
 # Vendor account and billing errors (optional, any harness). A headless or resume step whose stdout or stderr holds a known
 # vendor error (out of credits, quota exceeded, rate limit, plan does not allow the model, not logged in or session expired,

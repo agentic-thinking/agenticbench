@@ -18,8 +18,8 @@ A pass describes one measured run within the implemented procedure. Read [KNOWN-
 | `harnesses.txt` | Harness versions under test, where each comes from, and the sha256 of downloaded files where pinned |
 | `rig.conf.example` | Operator configuration: model provider, vendor-hosted harness settings, optional safety block |
 | `build.sh`, `docker/` | Builds every image (base, tools, mitm, one per harness; `docker/hermes/` for the one harness installed by a vendor script) and creates the lab CA |
-| `bench/unit.sh`, `bench/batch.sh` | One test unit; the full unit list of METHOD.md for one or more harnesses |
-| `bench/harnesses/`, `bench/test_adapters.py` | One adapter per harness (17: aider, amp, auggie, claude, cline, codex, dsh, goose, grok, hermes, kilo, kimi, openclaw, opencode, pi, qwen, zcode): headless command, opt-out switches, approval flags (see its README); and their offline self-test |
+| `bench/unit.sh`, `bench/batch.sh`, `bench/stream_check.py` | One test unit; the full unit list of METHOD.md for one or more harnesses; the completeness check of streamed flows |
+| `bench/harnesses/`, `bench/test_adapters.py` | One adapter per harness (21: aider, amp, auggie, claude, cline, codex, cursor, dsh, gemini, goose, grok, hermes, kilo, kimi, openclaw, opencode, openhands, pi, pydanticai, qwen, zcode): headless command, opt-out switches, approval flags (see its README); and their offline self-test |
 | `bench/analyse_all.sh`, `bench/analyse_unit.py`, `bench/digest.py` | Mechanical facts from the captures |
 | `bench/adjudication.example.json`, `bench/adjudication_init.py` | Template and starter for the hand-checked inputs |
 | `bench/score_bench.py`, `bench/test_score_bench.py`, `bench/test_evidence_model.py` | Captures plus adjudication to per-test results (the input of `score/score.py`), and its tests |
@@ -33,7 +33,7 @@ A pass describes one measured run within the implemented procedure. Read [KNOWN-
 - Linux (x86_64) with Docker; your user must be able to run `docker`. Any host uid works: inside the containers the harness runs as uid 1000, your key and credential files are read by your own user, and each unit's files are handed back to your user when it ends.
 - Python 3.10 or newer with `brotli` and `zstandard` for full L2 decoding on the scoring host (Debian/Ubuntu packages `python3-brotli` and `python3-zstandard`; missing comparison decoders force nt for affected bodies), `curl`, and about 3 GB of disk for the shared images plus 0.5 to 2 GB per harness image.
 - An API key for a model provider with an OpenAI-compatible API (chat completions; Codex also needs the Responses API). Claude Code also needs an Anthropic-compatible endpoint from the same provider. Keep the key in a file outside this repository. It is mounted read-only into the capture proxy container only; the harness holds a random dummy key that the proxy swaps for the real one.
-- Vendor-hosted harnesses (`amp`, `auggie`) need your own logged-in account; see `rig.conf.example`.
+- Vendor-hosted harnesses (`amp`, `auggie`, `cursor`, `gemini`) need your own account and its credential file, which you prepare and keep outside this repository (Gemini CLI: a JSON file holding your own API key); see `rig.conf.example`. The rig never ships a credential.
 - DeepSeek Harness (`dsh`) talks only to the DeepSeek API: set `MODEL_UPSTREAM` to it (or a compatible API) when you test it.
 
 ## Run one agent end to end

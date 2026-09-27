@@ -10,18 +10,20 @@ set -euo pipefail
 L=$(cd "$(dirname "$0")" && pwd); cd "$L"
 source "$L/bench/common.sh"
 fail=()
+UV_VERSION=0.12.19; UV_PY=3.12    # kind uv: the uv release and managed CPython minor version used to install the harness
 
 step(){ echo "== $*"; }
 build(){ # tag dockerfile context [docker build arguments]
   if docker build -q -t "$1" -f "$2" "${@:4}" "$3" >/dev/null; then echo "built $1"; else echo "FAILED $1" >&2; fail+=("$1"); fi; }
 
-pin(){ # file sha256 -> check command (nothing when no pin is given; kind gz requires one)
+pin(){ # file sha256 -> check command (nothing when no pin is given; kinds gz and targz require one)
   [ -z "$2" ] || echo " && echo '$2  $1' | sha256sum -c - \\"; }
 
 gen(){ # name kind src ver exe [sha256] -> Dockerfile on stdout
   local n=$1 k=$2 s=$3 v=$4 e=$5 p=${6:-}
   [ -z "$p" ] || [[ $p =~ ^[0-9a-f]{64}$ ]] || { echo "bad sha256 pin for $n" >&2; return 1; }
-  echo "# agenticbench-$n: $s $v from the vendor's official channel ($k), nothing else added."
+  local added="nothing else added"; [ "$k" = uv ] && added="plus uv $UV_VERSION and the uv-managed CPython $UV_PY it runs on"
+  echo "# agenticbench-$n: $s $v from the vendor's official channel ($k), $added."
   echo "FROM $BASE"
   echo "LABEL org.opencontainers.image.title=\"agenticbench-$n\" org.agenticbench.rig=\"harness\" org.agenticbench.source=\"$s\" org.agenticbench.version=\"$v\" org.agenticbench.channel=\"$k\""
   echo "USER root"
@@ -46,9 +48,30 @@ gen(){ # name kind src ver exe [sha256] -> Dockerfile on stdout
           echo "RUN curl -fsSL -o /tmp/a.gz $s \\"; pin /tmp/a.gz "$p"
           echo " && sha256sum /tmp/a.gz > /opt/agenticbench/artefact.sha256 \\"
           echo " && gunzip -c /tmp/a.gz > /usr/local/bin/$e && chmod 755 /usr/local/bin/$e && sha256sum /usr/local/bin/$e >> /opt/agenticbench/artefact.sha256 && rm /tmp/a.gz" ;;
+    targz) # vendor release tarball (gzip): unpacked to /opt/$n, the executable linked into /usr/local/bin
+          [ -n "$p" ] || { echo "kind targz needs a sha256 pin for $n (harnesses.txt, sixth column)" >&2; return 1; }
+          echo "RUN curl -fsSL -o /tmp/a.tar.gz $s \\"; pin /tmp/a.tar.gz "$p"
+          echo " && sha256sum /tmp/a.tar.gz > /opt/agenticbench/artefact.sha256 \\"
+          echo " && mkdir -p /opt/$n && tar --strip-components=1 -xzf /tmp/a.tar.gz -C /opt/$n && test -x /opt/$n/$e && chmod -R a+rX /opt/$n \\"
+          echo " && ln -s /opt/$n/$e /usr/local/bin/$e && sha256sum /opt/$n/$e >> /opt/agenticbench/artefact.sha256 \\"
+          echo " && find /opt/$n -maxdepth 1 -type f -size +1M -exec sha256sum {} + >> /opt/agenticbench/artefact.sha256 && rm -f /tmp/a.tar.gz" ;;
     pypi) echo "RUN python3 -m venv /opt/$n && /opt/$n/bin/pip install --no-cache-dir --disable-pip-version-check $s==$v \\"
           echo " && ln -s /opt/$n/bin/$e /usr/local/bin/$e && /opt/$n/bin/pip download --no-deps --no-cache-dir -d /tmp/w $s==$v -q \\"
           echo " && sha256sum /tmp/w/* > /opt/agenticbench/artefact.sha256 && rm -rf /tmp/w" ;;
+    uv)   # Python tool installed with uv (pinned, from PyPI) into its own managed CPython $UV_PY: for packages that need a newer
+          # Python than the base image's, or that the vendor documents as a uv tool with extra packages. SRC = main package, then
+          # optional "+"-joined pinned extras (each pkg==ver) installed alongside; an extra whose name is EXE provides the executable.
+          local main=${s%%+*} extra=() wx=() qx=() x P='[A-Za-z0-9][A-Za-z0-9._-]*(\[[A-Za-z0-9._,-]+\])?' W='[A-Za-z0-9][A-Za-z0-9.!_-]*'
+          [[ $main =~ ^$P$ && $v =~ ^$W$ && $s != *+ ]] || { echo "bad uv package or version for $n" >&2; return 1; }
+          [ "$s" != "$main" ] && IFS=+ read -r -a extra <<< "${s#*+}"
+          for x in "${extra[@]}"; do [[ $x =~ ^$P==$W$ ]] || { echo "uv extra '$x' for $n is not a pinned pkg==ver" >&2; return 1; }
+            qx+=("'$x'"); wx+=(--with "'$x'"); [ "${x%%[=[]*}" = "$e" ] && wx+=(--with-executables-from "$e"); done
+          echo "ENV UV_TOOL_DIR=/opt/uvtools UV_TOOL_BIN_DIR=/usr/local/bin UV_PYTHON_INSTALL_DIR=/opt/uvpython UV_NO_CACHE=1 UV_PYTHON_PREFERENCE=only-managed"
+          echo "RUN python3 -m venv /opt/uv && /opt/uv/bin/pip install --no-cache-dir --disable-pip-version-check uv==$UV_VERSION \\"
+          echo " && /opt/uv/bin/uv tool install --python $UV_PY '$main==$v' ${wx[*]} \\"
+          echo " && /opt/uv/bin/uv pip freeze --python /opt/uvtools/${main%%[*}/bin/python > /opt/agenticbench/resolved.txt \\"
+          echo " && /opt/uv/bin/pip download --no-deps --no-cache-dir --only-binary=:all: --python-version $UV_PY -d /tmp/w '$main==$v' ${qx[*]} -q \\"
+          echo " && sha256sum /tmp/w/* > /opt/agenticbench/artefact.sha256 && rm -rf /tmp/w && chmod -R a+rX /opt/uvtools /opt/uvpython" ;;
     *)    echo "unknown kind $k for $n" >&2; return 1 ;;
   esac
   echo "RUN command -v $e >/dev/null"
