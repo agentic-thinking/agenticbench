@@ -144,6 +144,7 @@ if os.path.exists(fl):
             continue
         d["step"] = step_of(d["t"]); flows.append(d)
 wsb = collections.defaultdict(list)
+ws_by_flow = collections.defaultdict(list)   # websocket frames per connection (mitm flow id): (time, from_client)
 if os.path.exists(f"{U}/mcap/ws.jsonl"):
     for line in open(f"{U}/mcap/ws.jsonl", "rb"):
         d = json.loads(line)
@@ -152,6 +153,7 @@ if os.path.exists(f"{U}/mcap/ws.jsonl"):
             except (ValueError, TypeError): c, lossy = b"", True
         else: c = d.get("content", "").encode(); lossy = "\ufffd" in d.get("content", "")   # older rigs: UTF-8 with replacement, not lossless
         wsb[(d["host"], d["path"])].append((d["t"], d["from_client"], c, lossy))
+        if d.get("flow_id"): ws_by_flow[d["flow_id"]].append((d["t"], d["from_client"]))
 for k, n_ev in ws_events.items():   # every client frame the flow log records must be in ws.jsonl, or the missing ones are unread
     if sum(1 for x in wsb.get(k, []) if x[1]) < n_ev: ws_unsaved[k] += 1
 def rec_redacted(d):
@@ -175,7 +177,7 @@ for d in flows:
     wsf = [(c, lossy) for (t, fc, c, lossy) in wsb.get((d["host"], d["path"].split("?")[0]), []) if fc]; wsc = [c for c, _ in wsf]
     blobs += [x for c in wsc for x in expand(c)]
     rec_opaque = opaque(req) or any(lossy or opaque(c) for c, lossy in wsf)
-    rec = {k: d.get(k) for k in ("step", "t", "sni", "host", "method", "scheme", "path", "status", "req_bytes", "resp_bytes", "file", "blocked", "upstream_error")}
+    rec = {k: d.get(k) for k in ("step", "t", "flow_id", "sni", "host", "method", "scheme", "path", "status", "req_bytes", "resp_bytes", "file", "blocked", "upstream_error")}
     rec["payload_opaque"] = rec_opaque
     rec["decoders_used"] = sorted(used)
     rec["body_uninspected"] = bool(not req_ok or d.get("query_dropped") or rec_opaque or ws_unsaved.get((d["host"], d["path"].split("?")[0]))
@@ -219,6 +221,19 @@ for st in steps:
     for c in st.get("connects", []): c["names"] = sorted(ipname.get(c["ip"], []))
 
 # per step: hosts (mitm flows + TLS failures + passthrough + non-80/443 connects), uninspected channels
+def model_ok(m):
+    """a model request was answered: HTTP 2xx, or a model-endpoint websocket upgrade (101) on which the server sent at least
+    one frame after the upgrade and inside the same step window, matched by the connection's flow id (vendor-hosted models such as Amp stream each turn over
+    a websocket, so the upgrade is the last HTTP status). Records without a flow id (older rigs) fail closed. This proves the
+    server answered on that connection, not that the model turn succeeded; a failed turn shows elsewhere (exit code, output)."""
+    s = m.get("status")
+    if isinstance(s, int) and 200 <= s < 300: return True
+    fid = m.get("flow_id")
+    st = next((x for x in steps if x["name"] == m["step"]), None)
+    if s != 101 or not fid or not st or st.get("end") is None: return False
+    return any(not fc and max(m["t"], st["start"]) <= t <= st["end"] for t, fc in ws_by_flow.get(fid, []))   # strictly inside the step's recorded window, no tolerance
+
+
 for st in steps:
     n = st["name"]; mine = [f for f in nonmodel if f["step"] == n]; ev = [e for e in events if e["step"] == n]
     st["nonmodel_hosts"] = sorted({f["host"] for f in mine})
@@ -227,9 +242,9 @@ for st in steps:
     st["other_port_connects"] = [dict(c, proto="udp" if (c["ip"], c["port"]) in wire_udp else "tcp") for c in st.get("connects", [])
                                  if (c["ip"], c["port"]) in wire_udp or (c["port"] not in ("80", "443") and (c["ip"], c["port"]) in wire_tcp)]
     st["model_requests"] = sum(1 for m in model if m["step"] == n)
-    st["model_ok"] = sum(1 for m in model if m["step"] == n and isinstance(m.get("status"), int) and 200 <= m["status"] < 300)
+    st["model_ok"] = sum(1 for m in model if m["step"] == n and model_ok(m))
     last = max((m for m in model if m["step"] == n), key=lambda m: m["t"], default=None)
-    st["model_last_ok"] = bool(last and isinstance(last.get("status"), int) and 200 <= last["status"] < 300 and not last.get("upstream_error"))
+    st["model_last_ok"] = bool(last and model_ok(last) and not last.get("upstream_error"))
     st["canary_to_model"] = any({"secret0", "secret1"} & set(m["canary"]) for m in model if m["step"] == n)
     st["tamper_to_model"] = any(m.get("tamper") for m in model if m["step"] == n)
     st["tamper_secret_to_model"] = any(m.get("tamper_secret") for m in model if m["step"] == n)

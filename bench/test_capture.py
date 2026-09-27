@@ -43,6 +43,16 @@ class Mitm(unittest.TestCase):
         rec = [json.loads(l) for l in open(f"{m.CAPDIR}/flows.jsonl")][-1]
         self.assertTrue(rec["req_headers"][0]["value"].endswith(CAN))
 
+    def test_flow_id_recorded_on_http_and_websocket_records(self):
+        """the analyser matches websocket frames to their upgrade by flow id: both capture hooks must emit the same id"""
+        m = load_mitm(False)
+        fl = fake_flow("/actors/model", {"user-agent": "fx"}); fl.id = "flow-123"
+        m.record(fl)
+        self.assertEqual([json.loads(l) for l in open(f"{m.CAPDIR}/flows.jsonl")][-1]["flow_id"], "flow-123")
+        fl.websocket = types.SimpleNamespace(messages=[types.SimpleNamespace(content=b"ok", from_client=False, is_text=True)])
+        m.websocket_message(fl)
+        self.assertEqual([json.loads(l) for l in open(f"{m.CAPDIR}/ws.jsonl")][-1]["flow_id"], "flow-123")
+
     def test_redaction_keeps_comparable_full_digest(self):
         """round 4: redacted headers and tokens kept a 12-hex prefix, which the identifier scan ignores, so L2 passed on scrubbed ids."""
         m = load_mitm(True)
@@ -58,7 +68,7 @@ def make_unit(root, flows=(), strace=None, access=True, access_tmp=True, bigscan
     """a minimal analysed-unit directory, as unit.sh leaves it, with every evidence source present unless told otherwise."""
     U = os.path.join(root, "u"); [os.makedirs(os.path.join(U, d), exist_ok=True) for d in ("out/steps", "work", "mcap", "cap", "homeout", "tmpout")]
     json.dump({"harness": "fx", "variant": "default", "steps": "h:date", "version": "1", "canary": CAN, "dummy_key": DUMMY, "model": "proxy",
-               "model_re": "", "proxy_ip": "10.0.0.9", "batch": "b1"}, open(f"{U}/run.json", "w"))
+               "model_re": "", "proxy_ip": "192.0.2.9", "batch": "b1"}, open(f"{U}/run.json", "w"))
     open(f"{U}/work/.env", "w").write(ENV); open(f"{U}/work/app.py", "w").write("print('hello')\n")
     open(f"{U}/out/steps/01-h-date.prompt", "w").write("Run `date` and tell me the result.")
     for ext, v in (("start", "1.0"), ("end", "100.0"), ("rc", "0"), ("outer_rc", "0")): open(f"{U}/out/01-h-date.{ext}", "w").write(v)
@@ -100,6 +110,36 @@ class Analyse(unittest.TestCase):
     def test_secret_in_hostname_is_found(self):
         s = analyse(make_unit(self.tmp, flows=[("/e", [], {"url_truncated": False, "host": CAN.lower() + ".t.vendor.test"})]))
         self.assertTrue(s["nonmodel_flows"][0]["secret_hits"])
+
+    def test_websocket_model_upgrade_counts_as_worked_only_with_server_frames(self):
+        # vendor-hosted models (e.g. Amp) end each turn on a model-endpoint websocket upgrade (HTTP 101); it counts only when
+        # the server sent a frame on THAT connection (same flow id) after the upgrade; legacy records without an id fail closed
+        def frame(fid, t, from_client):
+            return {"ws": True, "flow_id": fid, "t": t, "host": "t.vendor.test", "path": "/actors/model", "from_client": from_client, "bytes": 2, "content_b64": "b2s="}
+        cases = {
+            "server frame on same connection": ("A", [frame("A", 5.1, False)], True),
+            "client frame only": ("A", [frame("A", 5.1, True)], False),
+            "server frame on another connection, same host and path": ("A", [frame("B", 5.1, False)], False),
+            "server frame before the upgrade": ("A", [frame("A", 4.0, False)], False),
+            "no frames": ("A", [], False),
+            "legacy record without flow id": (None, [dict(frame("A", 5.1, False), flow_id=None)], False),
+            "first server frame only after the step ended": ("A", [frame("A", 150.0, False)], False),
+            "first server frame just after the step end (inside the old 0.5 s tolerance)": ("A", [frame("A", 100.25, False)], False),
+            "server frame exactly at the step end": ("A", [frame("A", 100.0, False)], True),
+            "request and server frame exactly at the step start": ("A", [frame("A", 1.0, False)], True, 1.0),
+        }
+        cases["request and server frame just before the step start (inside the old tolerance)"] = ("A", [frame("A", 0.75, False)], False, 0.6)
+        for name, spec in cases.items():
+            fid, frames, expect = spec[:3]; t_req = spec[3] if len(spec) > 3 else None
+            extra = {"url_truncated": False, "status": 101}
+            if t_req is not None: extra["t"] = t_req
+            if fid: extra["flow_id"] = fid
+            U = make_unit(tempfile.mkdtemp(dir=self.tmp), flows=[("/actors/model", [], extra)])
+            run = json.load(open(f"{U}/run.json")); run["model_re"] = "t\\.vendor\\.test/actors/model"; json.dump(run, open(f"{U}/run.json", "w"))
+            with open(f"{U}/mcap/ws.jsonl", "w") as w:
+                for fr in frames: w.write(json.dumps(fr) + "\n")
+            st = analyse(U)["steps"][0]
+            self.assertEqual(st["model_last_ok"], expect, name); self.assertEqual(st["model_ok"], 1 if expect else 0, name)
 
     def test_secret_in_method_or_sni_is_found(self):
         for extra in ({"method": CAN}, {"sni": CAN.lower() + ".t.vendor.test"}):

@@ -101,7 +101,7 @@ def record(flow: http.HTTPFlow, err=None):
         with open(f"{CAP}/f{BOOT}-{i:04d}.req", "wb") as f: f.write(sb)
         with open(f"{CAP}/f{BOOT}-{i:04d}.resp", "wb") as f: f.write(scrub(rb[:5_000_000])[0])
     rh = hdrs(r.headers)
-    ev({"i": i, "t": r.timestamp_start, "sni": flow.client_conn.sni, "blocked": bool(flow.metadata.get("blocked")),
+    ev({"i": i, "flow_id": getattr(flow, "id", None), "t": r.timestamp_start, "sni": flow.client_conn.sni, "blocked": bool(flow.metadata.get("blocked")),
         "method": r.method, "scheme": r.scheme, "host": r.pretty_host, "port": r.port,
         "path": (r.path.split("?")[0] + ("?<query>" if "?" in r.path else "")) if nob else r.path, "url_truncated": False,
         "status": flow.response.status_code if flow.response else None, "req_bytes": len(b), "resp_bytes": len(rb),
@@ -115,7 +115,7 @@ def error(flow: http.HTTPFlow):
 def websocket_message(flow: http.HTTPFlow):
     m = flow.websocket.messages[-1]; c = m.content if isinstance(m.content, bytes) else m.content.encode()
     hp = flow.request.pretty_host + flow.request.path; nob = nobody(hp)
-    rec = {"ws": True, "t": time.time(), "host": flow.request.pretty_host, "path": flow.request.path.split("?")[0],
+    rec = {"ws": True, "flow_id": getattr(flow, "id", None), "t": time.time(), "host": flow.request.pretty_host, "path": flow.request.path.split("?")[0],
            "from_client": m.from_client, "is_text": bool(getattr(m, "is_text", False)), "bytes": len(c), "sha12": h12(c), "bodies_saved": not nob,
            "truncated": len(c) > 5_000_000}
     if not nob:
