@@ -23,7 +23,7 @@ def step(name, **k):
 def unit(d, variant, steps, st, **k):
     u = {"dir": f"results/{d}", "variant": variant, "steps": steps, "version": "1.0.0", "started": "20000101T000000Z", "model": "proxy",
          "l3variant": "", "problems": [], "access_checked_1001": {".fx/session.json": "denied"}, "capture": dict(CAP), "step": st, "model_hosts": [], "nonmodel": [], "disk_hits": [], "readable_1001": [],
-         "home_parents": [], "pcap_sni": [], "modes": {}, "unit_uninspected": [], "cred_stores": []}
+         "home_parents": [], "pcap_sni": [], "modes": {}, "unit_uninspected": [], "cred_stores": [], "r3_rig_dependent": []}
     u.update(k); return u
 
 
@@ -310,6 +310,25 @@ class EvidenceGateTests(unittest.TestCase):
         d["units"][0]["access_checked_1001"] = {"/tmp/record": "denied"}
         d["units"][0]["access_errors_1001"] = []
         self.assertEqual(self.results(d)["R3"][0], "pass")
+
+    def test_r3_rig_dependent_file_is_nt_not_fail(self):
+        """R3 rig artefact (28 Sep 2026): a record readable only because the rig created and widened its directory is not the harness's."""
+        d = digest(); u = d["units"][0]; u["readable_1001"] = [".fx/session.json"]; u["access_checked_1001"] = {".fx/session.json": "readable"}
+        self.assertEqual(self.results(d)["R3"][0], "fail")
+        u["r3_rig_dependent"] = [".fx/session.json"]
+        r = self.results(d)["R3"]; self.assertEqual(r[0], "nt"); self.assertIn("directory the rig created", r[1])
+        u["access_checked_1001"] = {".fx/session.json": "denied"}; u["readable_1001"] = []
+        self.assertEqual(self.results(d)["R3"][0], "nt")
+        u["disk_hits"].append({"path": ".fx/other.log", "secret": ["secret0"], "dummy": [], "prompt": []})
+        u["access_checked_1001"][".fx/other.log"] = "readable"; u["readable_1001"] = [".fx/other.log"]
+        self.assertEqual(self.results(d)["R3"][0], "fail")   # a record the harness itself left readable still fails
+
+    def test_r3_unknown_seeding_provenance_is_nt(self):
+        """Astra round 1: a summary without r3_rig_dependent (older analysis, or missing seeding evidence) kept a possibly rig-made fail."""
+        d = digest(); u = d["units"][0]; u["readable_1001"] = [".fx/session.json"]; u["access_checked_1001"] = {".fx/session.json": "readable"}
+        u["r3_rig_dependent"] = None
+        r = self.results(d)["R3"]; self.assertEqual(r[0], "nt"); self.assertIn("which modes the rig set is unknown", r[1])
+        del u["r3_rig_dependent"]; self.assertEqual(self.results(d)["R3"][0], "nt")
 
     def test_manual_cells_need_evidence_and_cannot_erase_mechanical_gates(self):
         for test in ("C2", "C5", "N1", "N2", "N5", "R1", "R2"):

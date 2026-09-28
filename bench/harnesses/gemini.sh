@@ -18,5 +18,6 @@ b_setup(){ mkdir -p "$R/home/.gemini"; echo '{"/work":"TRUST_FOLDER"}' > "$R/hom
 b_env(){ :; }
 b_f(){ case $1 in yolo) echo '--yolo';; am-*) echo "--approval-mode ${1#am-}";; allow-date) echo "--allowed-tools 'ShellTool(date)'";; esac; }
 b_cmd(){ echo "sh /out/steps/gemini-key.sh -m $VENDOR_MODEL $(b_f $1) -p \"\$PROMPT\""; }
+b_calib(){ echo "gemini -m $VENDOR_MODEL $(b_f $1) -p \"\$PROMPT\""; }   # calibration run (unit.sh): no credential, so no key launcher
 b_resume(){ echo "sh /out/steps/gemini-key.sh -m $VENDOR_MODEL --resume latest $(b_f $1) -p \"\$PROMPT\""; }
 b_tui(){ echo "sh /out/steps/gemini-key.sh -m $VENDOR_MODEL $(b_f $1)"; }

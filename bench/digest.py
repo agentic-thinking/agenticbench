@@ -117,6 +117,7 @@ for u in units:
     uu["access_errors_1001"] = None if acc is None else acc.get("errors", [])
     uu["access_checked_1001"] = None if acc is None else acc.get("checked")   # every probed path -> readable | denied | error:<kind>
     uu["pcap_sni"] = u["pcap_sni"]; uu["modes"] = {d["path"]: u["modes"].get(d["path"]) for d in u["disk_hits"]}
+    uu["r3_rig_dependent"] = u.get("r3_rig_dependent"); uu["home_seed"] = u.get("home_seed")   # None: analysed before home-seed.json
     out["units"].append(uu)
 os.makedirs(f"{S}/digest", exist_ok=True); json.dump(out, open(f"{S}/digest/{H}.json", "w"), indent=1)
 print(H, len(units), "units;", "I1 candidates", None if I1 is None else len(I1["candidates"]))

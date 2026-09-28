@@ -405,6 +405,55 @@ for hj, pre in ((jload(f"{U}/out/homeout.hits.json"), ""), (jload(f"{U}/out/tmpo
             ex["prompt"] = sorted(set(ex["prompt"]) | {x for x in nh if x.startswith("prompt_") and (re.match(r"prompt_\d+-h-(env|date|calc|ls|catenv)", x) or x.startswith("prompt_tampered"))})
     unreadable += [pre + e["path"] for e in (hj or {}).get("unreadable", [])]
 listing = jload(f"{U}/out/home-listing.json"); tlisting = jload(f"{U}/out/tmp-listing.json")
+# R3 measures the harness's own modes. A path the rig created before the run (seeded config, out/home-seed.json) with a mode the
+# calibration run did not show (source "rig"), and that still has that mode at the end, says nothing about the harness. A HOME file
+# is rig-dependent when such a path decides whether another user can read it: with every such path counted as open, the file is
+# other-readable and every directory on its path other-searchable, and at least one such path is the file or on its path. Units whose
+# run.json has home_seed (this rig) need a valid out/home-seed.json; units without it (rigs before 28 Sep 2026) copied init/ in with
+# every mode widened (a+rwX), so their init/ directories still at 0777 and init/ files still read-write for all are such paths. A
+# file on a rig path whose own or parent mode is missing from the listing counts as rig-dependent. The seeding record must name exactly
+# the staged config (init/) and the credential file, and the listing must be well formed and cover every HOME file the copy, the disk
+# scan and the access probe saw, with its parents. Otherwise r3_rig_dependent is None (unknown), which makes R3 nt.
+MODE = lambda m: int(m, 8) if isinstance(m, str) and re.fullmatch(r"0o[0-7]{1,4}", m) else None
+def rig_paths():
+    """path -> the mode the rig gave it (an int), or "wide" (legacy a+rwX); None when this rig's seeding record is missing or malformed."""
+    if run.get("home_seed"):
+        seed = jload(f"{U}/out/home-seed.json"); ents = seed.get("entries") if isinstance(seed, dict) else None
+        if not isinstance(ents, list) or not all(isinstance(e, dict) and isinstance(e.get("path"), str) and e.get("type") in ("dir", "file")
+                                                 and MODE(e.get("mode")) is not None and e.get("source") in ("harness", "rig") for e in ents):
+            return "seeded", None
+        # the record must name exactly the staged config (init/) plus the credential file, each once
+        staged = {os.path.relpath(os.path.join(d, n), f"{U}/init") for d, ds, fs in os.walk(f"{U}/init") for n in ds + fs}
+        paths = [e["path"] for e in ents]
+        if len(paths) != len(set(paths)) or set(paths) != staged | ({run["cred_dest"]} if run.get("cred_dest") else set()): return "seeded", None
+        return "seeded", {e["path"]: MODE(e["mode"]) for e in ents if e["source"] == "rig"}
+    if os.path.isdir(f"{U}/init"):
+        return "legacy", {os.path.relpath(os.path.join(d, n), f"{U}/init"): 0o777 if n in ds else "wide" for d, ds, fs in os.walk(f"{U}/init") for n in ds + fs}
+    return "none", {}
+seed_kind, rigp = rig_paths()
+def listing_complete():
+    """every listing entry well formed, and every HOME file the copy, the disk scan or the access probe saw is listed with its parents."""
+    if not isinstance(listing, list) or not all(isinstance(e, dict) and isinstance(e.get("path"), str) and MODE(e.get("mode")) is not None
+                                                and e.get("type") in ("dir", "file", "link", "socket/fifo") for e in listing): return False
+    kind = {e["path"]: e["type"] for e in listing}
+    seen = {d["path"] for d in disk if not d["path"].startswith("/tmp/")}
+    seen |= {os.path.relpath(os.path.join(d, n), f"{U}/homeout") for d, _, fs in os.walk(f"{U}/homeout") for n in fs}
+    a = jload(f"{U}/out/access-1001.json"); seen |= set(a["files"]) if isinstance(a, dict) and isinstance(a.get("files"), dict) else set()
+    for p in seen:
+        parts = p.split("/")
+        if kind.get(p) not in ("file", "link") or any(kind.get("/".join(parts[:i])) != "dir" for i in range(1, len(parts))): return False
+    return True
+rig_dep = None if rigp is None else [] if not rigp else None   # nothing seeded by the rig: every mode is the harness's own
+if rigp and listing_complete():
+    hm = {e["path"]: MODE(e["mode"]) for e in listing}
+    gap = {p for p, want in rigp.items() if hm.get(p) is not None and (hm[p] & 0o666 == 0o666 if want == "wide" else hm[p] == want)}
+    rig_dep = []
+    for e in listing:
+        if not isinstance(e, dict) or e.get("type") != "file" or not isinstance(e.get("path"), str): continue
+        p = e["path"]; parts = p.split("/"); chain = ["/".join(parts[:i]) for i in range(1, len(parts))] + [p]
+        if not set(chain) & set(rigp): continue   # nothing the rig created on this path: the modes are the harness's own
+        if any(hm.get(x) is None for x in chain): rig_dep.append(p); continue
+        if set(chain) & gap and (p in gap or hm[p] & 0o004) and all(a in gap or hm[a] & 0o001 for a in chain[:-1]): rig_dep.append(p)
 if listing is not None and tlisting is not None: listing = listing + [dict(e, path="/tmp/" + e["path"]) for e in tlisting]
 else: listing = None
 # R3 probes as uid 1001: HOME files (relative paths) and the harness user's /tmp files ("/tmp/" + path). Both probes must exist, and
@@ -457,6 +506,7 @@ S = {"run": {k: v for k, v in run.items() if k != "dummy_key"}, "capture": captu
      "unit_uninspected": unit_un, "access_1001": None if access is None else {"parents": access.get("parents"), "readable": sorted(k for k, v in access["files"].items() if v == "readable"),
                      "errors": sorted(k for k, v in access["files"].items() if v.startswith("error")),
                      "denied_n": sum(1 for v in access["files"].values() if v == "denied"), "checked": access["files"]},
-     "modes": {e["path"]: e["mode"] for e in listing or []}}
+     "modes": {e["path"]: e["mode"] for e in listing or []},
+     "home_seed": {"kind": seed_kind, "rig_paths": None if rigp is None else sorted(rigp)}, "r3_rig_dependent": None if rig_dep is None else sorted(rig_dep)}
 json.dump(S, open(f"{U}/summary.json", "w"), indent=1, default=str)
 print(U, "steps", len(steps), "model", len(model), "nonmodel", len(nonmodel), "tls_failed", sum(1 for e in events if e.get("tls_failed")))

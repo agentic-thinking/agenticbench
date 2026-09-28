@@ -15,7 +15,8 @@ proxy swaps for the real one), `ENVS` (extra `-e` arguments for the harness cont
 | `VENDOR_MODEL` | vendor-hosted only, optional: the model the adapter selects explicitly; recorded as `model_id` in run.json |
 | `TMO` | per-step timeout in seconds (default 180) |
 | `ERROR_RE` | optional: a case-insensitive regex for this harness's own account or billing error wording, added to the built-in list in `bench/lib/vendor_errors.py` (and to `<harness>_ERROR_RE` from `rig.conf`). A headless or resume step whose stdout or stderr matches does not count as worked |
-| `b_setup V`, `b_env V` | write config for variant V into `$R/home`; add environment for variant V to `ENVS` |
+| `b_setup V`, `b_env V` | write config for variant V into `$R/home`; add environment for variant V to `ENVS`. The modes written on the host are not used: `unit.sh` seeds HOME with the modes the harness gives those paths itself (METHOD.md, HOME seeding) |
+| `b_calib V` | optional: the headless command for the offline calibration run, where `b_cmd` cannot run without the credential (default: `b_cmd V`; `gemini`) |
 | `b_cmd V` | the documented headless command; the prompt is in `$PROMPT` |
 | `b_resume V` | optional: headless resume of the most recent session |
 | `b_tui V` | optional: the interactive entry point (no function = no interactive mode; the step is recorded as skipped) |

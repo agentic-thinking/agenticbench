@@ -585,5 +585,150 @@ class Listing(unittest.TestCase):
         self.assertEqual(sorted(open(f"{t}.files").read().split()), ["locked.txt", "ok.txt"])
 
 
+class SeedHome(unittest.TestCase):
+    """R3 rig artefact (28 Sep 2026): the rig pre-created harness config directories and widened them with chmod -R a+rwX, so R3
+    measured the rig's modes, not the harness's. The config is now seeded with the modes the harness gives those paths itself."""
+    def seed(self, calib):
+        t = tempfile.mkdtemp(prefix="abseed-"); self.addCleanup(shutil.rmtree, t, True)
+        st, home = f"{t}/staged", f"{t}/home"; os.makedirs(f"{st}/.fx/sub"); os.makedirs(f"{st}/.cfg/fx"); os.mkdir(home)
+        for f in (".fx/config.json", ".fx/sub/a", ".cfg/fx/auth.json"): open(f"{st}/{f}", "w").write("x")
+        os.chmod(f"{st}/.fx", 0o777); os.chmod(f"{st}/.fx/config.json", 0o666)   # wide staged modes never reach HOME
+        if calib is not None: json.dump(calib, open(f"{t}/cal.json", "w"))
+        tar = subprocess.run(["tar", "-C", st, "-cf", "-", "."], capture_output=True, check=True).stdout
+        r = subprocess.run([sys.executable, os.path.join(HERE, "lib", "seed_home.py"), home, f"{t}/cal.json", f"{t}/seed.json"], input=tar, capture_output=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        mode = lambda p: oct(os.stat(f"{home}/{p}").st_mode & 0o7777)
+        return mode, json.load(open(f"{t}/seed.json")), home
+
+    def test_harness_modes_used_and_unobserved_paths_closed(self):
+        mode, rec, _ = self.seed([{"path": ".fx", "type": "dir", "mode": "0o755"}, {"path": ".fx/config.json", "type": "file", "mode": "0o644"},
+                                  {"path": ".fx/sub", "type": "file", "mode": "0o644"}])
+        self.assertEqual(mode(".fx"), "0o755"); self.assertEqual(mode(".fx/config.json"), "0o644")
+        self.assertEqual(mode(".fx/sub"), "0o700"); self.assertEqual(mode(".fx/sub/a"), "0o600")   # a dir seen only as a file is not observed
+        self.assertEqual(mode(".cfg"), "0o700"); self.assertEqual(mode(".cfg/fx/auth.json"), "0o600")
+        src = {e["path"]: e["source"] for e in rec["entries"]}
+        self.assertEqual(rec["calibration"], "ok"); self.assertEqual(src[".fx"], "harness"); self.assertEqual(src[".cfg/fx"], "rig")
+
+    def test_missing_calibration_closes_everything(self):
+        mode, rec, home = self.seed(None)
+        self.assertEqual(rec["calibration"], "missing"); self.assertEqual(mode(".fx"), "0o700"); self.assertEqual(mode(".fx/config.json"), "0o600")
+        self.assertEqual(open(f"{home}/.fx/sub/a").read(), "x")
+
+    def rigdep(self, seed=None, init=False, modes=None, listing=True, home_seed=None, extra_init=(), cred=None, access=None):
+        U = make_unit(self.tmp_())
+        modes = modes or {".fx": "0o700", ".fx/s.json": "0o644", ".fx/own": "0o755", ".fx/own/r.json": "0o644"}
+        if listing: json.dump([{"path": p, "mode": m, "type": "file" if "." in p.rsplit("/", 1)[-1][1:] else "dir"} for p, m in modes.items()], open(f"{U}/out/home-listing.json", "w"))
+        else: os.remove(f"{U}/out/home-listing.json")
+        if access is None: access = {p: "readable" for p in modes if "." in p.rsplit("/", 1)[-1][1:]}
+        if home_seed if home_seed is not None else seed is not None:
+            r = json.load(open(f"{U}/run.json")); r["home_seed"] = 1; json.dump(r, open(f"{U}/run.json", "w"))
+        if seed is not None:
+            json.dump(seed, open(f"{U}/out/home-seed.json", "w"))
+            for e in seed.get("entries", []):   # the staged config the record describes, kept as init/ by unit.sh
+                if e.get("type") == "dir": os.makedirs(f"{U}/init/{e['path']}", exist_ok=True)
+                elif not e.get("credential"): os.makedirs(os.path.dirname(f"{U}/init/{e['path']}"), exist_ok=True); open(f"{U}/init/{e['path']}", "w").close()
+        if init: os.makedirs(f"{U}/init/.fx"); open(f"{U}/init/.fx/conf.json", "w").close()
+        for p in extra_init: os.makedirs(f"{U}/init/{p}", exist_ok=True)
+        if cred: r = json.load(open(f"{U}/run.json")); r["cred_dest"] = cred; json.dump(r, open(f"{U}/run.json", "w"))
+        if access is not None: json.dump({"uid": 1001, "parents": [], "files": access}, open(f"{U}/out/access-1001.json", "w"))
+        return analyse(U)
+
+    def tmp_(self):
+        t = tempfile.mkdtemp(prefix="abrd-"); self.addCleanup(shutil.rmtree, t, True); return t
+
+    RIGFX = {"calibration": "missing", "entries": [{"path": ".fx", "type": "dir", "mode": "0o700", "source": "rig"}]}
+
+    def test_rig_mode_directory_makes_files_rig_dependent(self):
+        s = self.rigdep(self.RIGFX)
+        self.assertEqual(s["r3_rig_dependent"], [".fx/own/r.json", ".fx/s.json"]); self.assertEqual(s["home_seed"]["kind"], "seeded")
+
+    def test_harness_mode_directory_is_the_harness_own(self):
+        s = self.rigdep({"calibration": "ok", "entries": [{"path": ".fx", "type": "dir", "mode": "0o700", "source": "harness"}]})
+        self.assertEqual(s["r3_rig_dependent"], [])
+
+    def test_directory_the_harness_changed_is_its_own(self):
+        s = self.rigdep(self.RIGFX, modes={".fx": "0o711", ".fx/s.json": "0o644"})
+        self.assertEqual(s["r3_rig_dependent"], [])
+
+    def test_closed_file_or_closed_harness_dir_is_not_rig_dependent(self):
+        s = self.rigdep(self.RIGFX, modes={".fx": "0o700", ".fx/s.json": "0o600", ".fx/own": "0o700", ".fx/own/r.json": "0o644"})
+        self.assertEqual(s["r3_rig_dependent"], [])
+
+    def test_seeded_file_still_at_rig_mode_is_rig_dependent(self):
+        """Astra round 1: session content written into a seeded 0600 config file was protected by the rig's mode, not the harness's."""
+        seed = {"calibration": "ok", "entries": [{"path": ".fx", "type": "dir", "mode": "0o755", "source": "harness"},
+                                                 {"path": ".fx/s.json", "type": "file", "mode": "0o600", "source": "rig"}]}
+        self.assertEqual(self.rigdep(seed, modes={".fx": "0o755", ".fx/s.json": "0o600"})["r3_rig_dependent"], [".fx/s.json"])
+        self.assertEqual(self.rigdep(seed, modes={".fx": "0o755", ".fx/s.json": "0o640"})["r3_rig_dependent"], [])   # the harness set its own
+
+    def test_missing_or_malformed_evidence_is_unknown(self):
+        """Astra round 1: a missing seed record or listing read as 'nothing depends on the rig', a false pass."""
+        self.assertIsNone(self.rigdep(None, home_seed=True)["r3_rig_dependent"])   # run.json says seeded, record missing
+        self.assertIsNone(self.rigdep({"entries": [{"path": ".fx", "type": "dir", "mode": "700", "source": "rig"}]})["r3_rig_dependent"])
+        self.assertIsNone(self.rigdep({"entries": [{"path": ".fx", "type": "dir", "mode": "0o700", "source": "?"}]})["r3_rig_dependent"])
+        self.assertIsNone(self.rigdep(self.RIGFX, listing=False)["r3_rig_dependent"])
+
+    def test_missing_mode_on_a_rig_path_is_rig_dependent(self):
+        self.assertEqual(self.rigdep(self.RIGFX, modes={".fx": None, ".fx/s.json": "0o600"})["r3_rig_dependent"], None)   # malformed entry
+        self.assertEqual(self.rigdep(self.RIGFX, modes={".fx": "0o700", ".fx/s.json": "0o600"}, access={".fx/s.json": "denied"})["r3_rig_dependent"], [])
+
+    def test_incomplete_listing_is_unknown(self):
+        """Astra round 2: a listing without the session file (or its parent, or a type) read as independent, a false pass."""
+        self.assertIsNone(self.rigdep(self.RIGFX, modes={".fx": "0o700"}, access={".fx/s.json": "denied"})["r3_rig_dependent"])   # probed file unlisted
+        self.assertIsNone(self.rigdep(self.RIGFX, modes={".fx/s.json": "0o644"})["r3_rig_dependent"])              # its parent unlisted
+        U = make_unit(self.tmp_()); r = json.load(open(f"{U}/run.json")); r["home_seed"] = 1; json.dump(r, open(f"{U}/run.json", "w"))
+        json.dump(self.RIGFX, open(f"{U}/out/home-seed.json", "w")); os.makedirs(f"{U}/init/.fx")
+        json.dump([{"path": ".fx", "mode": "0o700", "type": "dir"}, {"path": ".fx/s.json", "mode": "0o644"}], open(f"{U}/out/home-listing.json", "w"))
+        self.assertIsNone(analyse(U)["r3_rig_dependent"])                                                          # an entry without a type
+
+    def test_incomplete_or_duplicated_seed_record_is_unknown(self):
+        """Astra round 2: a well-formed but empty record hid the rig's directories."""
+        self.assertIsNone(self.rigdep({"entries": []}, extra_init=[".fx"])["r3_rig_dependent"])
+        self.assertIsNone(self.rigdep({"entries": self.RIGFX["entries"] * 2})["r3_rig_dependent"])
+        self.assertIsNone(self.rigdep(self.RIGFX, cred=".fx/auth.json")["r3_rig_dependent"])                        # credential not recorded
+
+    def test_credential_file_mode_is_the_rig_s(self):
+        """Astra round 2: the credential file's 0600 is the rig's; content in it must not count as protected by the harness."""
+        seed = {"calibration": "ok", "entries": [{"path": ".fx", "type": "dir", "mode": "0o755", "source": "harness"},
+                                                 {"path": ".fx/s.json", "type": "file", "mode": "0o600", "source": "rig", "credential": True}]}
+        self.assertEqual(self.rigdep(seed, modes={".fx": "0o755", ".fx/s.json": "0o600"}, cred=".fx/s.json")["r3_rig_dependent"], [".fx/s.json"])
+
+    def test_record_adds_credential_with_actual_mode(self):
+        t = self.tmp_(); os.makedirs(f"{t}/h/.fx"); open(f"{t}/h/.fx/auth.json", "w").close(); os.chmod(f"{t}/h/.fx/auth.json", 0o600)
+        json.dump({"calibration": "ok", "entries": []}, open(f"{t}/seed.json", "w"))
+        r = subprocess.run([sys.executable, os.path.join(HERE, "lib", "seed_home.py"), "--record", f"{t}/h", f"{t}/seed.json", ".fx/auth.json"], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(json.load(open(f"{t}/seed.json"))["entries"], [{"path": ".fx/auth.json", "type": "file", "mode": "0o600", "source": "rig", "credential": True}])
+
+    def test_legacy_unit_widened_init_paths(self):
+        s = self.rigdep(init=True, modes={".fx": "0o777", ".fx/s.json": "0o644"})
+        self.assertEqual(s["home_seed"]["kind"], "legacy"); self.assertEqual(s["r3_rig_dependent"], [".fx/s.json"])
+        s = self.rigdep(init=True, modes={".fx": "0o755", ".fx/conf.json": "0o666"})
+        self.assertEqual(s["r3_rig_dependent"], [".fx/conf.json"])
+
+
+class UnitSeedScript(unittest.TestCase):
+    src = open(os.path.join(HERE, "unit.sh")).read()
+
+    def test_home_never_widened(self):
+        self.assertNotIn('chmod -R a+rwX "$R"   ', self.src); self.assertNotIn('chmod -R a+rwX "$R"\n', self.src)
+        self.assertIn('chmod -R a+rwX "$R/cap" "$R/mcap" "$R/pcap" "$R/out" "$R/work"', self.src)
+        self.assertNotIn("/run/init", self.src); self.assertNotIn("cp -a", self.src)
+
+    def test_calibration_offline_and_before_seeding(self):
+        c = self.src.index('docker run --rm --name "$CALC"'); seed = self.src.index("seed_home.py /home/lab")
+        self.assertIn("--network none", self.src[c:c + 200]); self.assertLess(c, seed)
+        self.assertNotIn("CRED", self.src[c:self.src.index("\n", self.src.index("listing.py /home/lab /out/calibration", c))])
+
+    def test_partial_seed_archive_stops_the_unit(self):
+        """Astra round 1: without pipefail a failing tar (partial archive) went unnoticed; bash really propagates it here."""
+        self.assertIn('( set -o pipefail; tar -C "$R/home" -cf - . | docker exec -i', self.src)
+        r = subprocess.run(["bash", "-c", '( set -o pipefail; { tar -cf - --files-from /dev/null; exit 2; } | cat >/dev/null ) || echo stopped'], capture_output=True, text=True)
+        self.assertEqual(r.stdout.strip(), "stopped")
+
+    def test_run_json_marks_seeded_units(self):
+        self.assertIn('"home_seed":1,', self.src)
+
+
 if __name__ == "__main__":
     unittest.main()

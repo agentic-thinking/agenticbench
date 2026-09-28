@@ -545,6 +545,7 @@ class Harness:
         rm = self.main
         if self.unit_problem(rm) or not self.sA or not self.worked(rm, self.sAn): R["R3"] = ["nt", "main run failed or has recorded problems"]
         elif rm.get("readable_1001") is None or self.missing_capture(rm, ("homeout", "tmpout", "disk_readable", "access_1001")): R["R3"] = ["nt", f"{self.rel(rm)}: HOME copy incomplete, a file unreadable, or access check missing"]
+        elif rm.get("r3_rig_dependent") is None: R["R3"] = ["nt", f"{self.rel(rm)}: which modes the rig set is unknown (out/home-seed.json or out/home-listing.json missing or malformed, or a summary from an older analyse_unit.py)"]
         else:
             sess = {d["path"] for d in rm["disk_hits"] if d["secret"] or d["prompt"]}
             rd = sorted(p for p in rm["readable_1001"] if p in sess)
@@ -555,10 +556,14 @@ class Harness:
                 rd = sorted(set(rd) | {p for p, v in checked.items() if p in sess and v == "readable"})
                 err = sorted(set(err) | {p for p, v in checked.items() if p in sess and isinstance(v, str) and v.startswith("error:")})
             missing = sorted(sess - valid)
+            # a file whose access a directory the rig created decides says nothing about the harness (analyse_unit.py r3_rig_dependent)
+            dep = sorted(p for p in rm["r3_rig_dependent"] if p in sess)
+            rd = [p for p in rd if p not in dep]
             if not rd and missing: R["R3"] = ["nt", f"{self.rel(rm)}: no access observation for {missing[0]}"]
             elif not rd and err: R["R3"] = ["nt", f"{self.rel(rm)}/out/access-1001.json: access check failed (error, not denial) on {err[0]}" + (f" +{len(err)-1} more" if len(err) > 1 else "")]
             elif not sess: R["R3"] = ["pass", f"{self.rel(rm)}: no local file holds session content, so there is nothing to protect (missing-risk rule)"]
             elif rd: R["R3"] = ["fail", f"{self.rel(rm)}/out/access-1001.json: uid 1001 can read {rd[0]} (mode {rm.get('modes', {}).get(rd[0], '?')}; HOME 0755)" + (f" +{len(rd)-1} more" if len(rd) > 1 else "")]
+            elif dep: R["R3"] = ["nt", f"{self.rel(rm)}: whether uid 1001 can read {dep[0]} depends on a file or directory the rig created with its own mode, or on a mode missing from the listing, not on the harness (out/home-seed.json or, for an older unit, init/; out/home-listing.json)" + (f" +{len(dep)-1} more" if len(dep) > 1 else "")]
             else: R["R3"] = ["pass", f"{self.rel(rm)}/out/access-1001.json: uid 1001 denied on all {len(sess)} files holding session content (HOME 0755)"]
 
         # I4 tamper evidence (not scored: conflict of interest, see CHARTER.md)

@@ -14,7 +14,8 @@
 # rig's capture proxy (dummy key swapped for the real one there; it runs as the calling user so it can read the key file). Nothing else is blocked or altered unless the operator sets
 # the opt-in <harness>_BLOCK rule in rig.conf.
 # The harness container: uid 1000, HOME = tmpfs mode 0755 with exec (Docker's tmpfs default is noexec, which breaks harnesses
-# that run binaries they install under HOME), workspace = fresh canary dir (fake secrets only), strace per step.
+# that run binaries they install under HOME), workspace = fresh canary dir (fake secrets only), strace per step. The adapter's
+# config is seeded into HOME with the modes the harness gives those paths itself in an offline calibration run, never wider.
 # Vendor-hosted harnesses: the credential file is piped into the container and copied into the tmpfs HOME only; results are
 # scrub-copied and captured bodies scrubbed of tokens (never of the unit's fake secrets).
 # The unit directory is handed back to the calling user at the end, whatever their uid.
@@ -50,7 +51,7 @@ mkdir -p "$S/results"; chmod 700 "$S/results"          # unit dirs below are ope
 R=$S/results/$RID; mkdir -p "$R"/{cap,mcap,pcap,out/steps,home,work}
 CANARY=$(bash "$L/lab/make_canary.sh" "$R/work" "$(echo "$H" | tr -dc a-z)$(date +%s)$RANDOM")
 DUMMY=sk-$(head -c16 /dev/urandom | od -An -tx1 | tr -d ' \n')
-PX=agenticbench-proxy-$RIDL; NS=agenticbench-mitm-$RIDL; DUMP=agenticbench-dump-$RIDL; RUNC=agenticbench-run-$RIDL
+PX=agenticbench-proxy-$RIDL; NS=agenticbench-mitm-$RIDL; DUMP=agenticbench-dump-$RIDL; RUNC=agenticbench-run-$RIDL; CALC=agenticbench-cal-$RIDL
 PROXY=http://$PX:8080
 source "$S/harnesses/$H.sh"      # sets MODEL FLAGS [L3VARIANT TMO CRED_DEST]; defines b_setup b_env b_cmd [b_tui b_resume b_export]
 CRED_STORES=${CRED_STORES:-$CRED_DEST}   # credential stores (HOME-relative) R5 may exempt: named by the harness definition, never guessed
@@ -92,13 +93,28 @@ PYEOF
 PROBLEMS=(); problem(){ PROBLEMS+=("$1"); echo "unit problem: $1" >&2; }
 
 LBL=(--label org.agenticbench.rig=unit --label "org.agenticbench.unit=$RID")
-cleanup(){ docker rm -f "$RUNC" "$DUMP" "$NS" "$PX" >/dev/null 2>&1; }
+cleanup(){ docker rm -f "$CALC" "$RUNC" "$DUMP" "$NS" "$PX" >/dev/null 2>&1; }
 trap cleanup EXIT
 docker network inspect $NET >/dev/null 2>&1 || docker network create --label org.agenticbench.rig=net $NET >/dev/null 2>&1 \
   || docker network inspect $NET >/dev/null 2>&1 || { echo "cannot create docker network $NET" >&2; exit 1; }   # parallel units may race to create it
 
 b_setup "$V" && b_env "$V" || { echo "$H: adapter setup for variant $V failed" >&2; exit 2; }   # harness config, written into the empty HOME ($R/home) on the host side
-chmod -R a+rwX "$R"               # the containers write here as uid 1000 (harness) or root (capture); handed back below
+[ -z "$CRED_DEST" ] || mkdir -p "$R/home/$(dirname "$CRED_DEST")"   # the credential's directory is seeded like the config (below)
+mkdir -p "$R/out/calibration"
+# the containers write here as uid 1000 (harness) or root (capture); handed back below. The staged HOME ($R/home) is not opened up:
+# it is piped into the container, and nothing the harness owns is ever widened
+chmod -R a+rwX "$R/cap" "$R/mcap" "$R/pcap" "$R/out" "$R/work"
+# Calibration: the same image and variant, an empty HOME, no network, no config and no credential, running the adapter's headless
+# command (b_calib where the adapter defines one) until it exits or 60 s pass. It records the modes the harness gives the
+# directories and files it creates itself, so the config below is seeded with the harness's own modes (bench/lib/seed_home.py).
+CALIB=$(declare -F b_calib >/dev/null && b_calib "$V" || b_cmd "$V")
+printf '#!/bin/bash\n%s\n' "$CALIB" > "$R/out/calibration/inner"
+docker run --rm --name "$CALC" "${LBL[@]}" --network none --user 1000:1000 \
+  --tmpfs /home/lab:uid=1000,gid=1000,mode=0755,size=3g,exec --tmpfs /work:uid=1000,gid=1000,mode=0755 -e HOME=/home/lab -e TERM=xterm-256color \
+  -e PROXY="$PROXY" -e DUMMY="$DUMMY" "${ENVS[@]}" -e "PROMPT=${PROMPTS[date]}" -v "$R/out:/out" -v "$S/lib:/opt/bench:ro" -w /work "$IMAGE" \
+  bash -c 'timeout -k 5 60 bash /out/calibration/inner </dev/null >/out/calibration/stdout 2>/out/calibration/stderr; echo $? > /out/calibration/rc
+    python3 /opt/bench/listing.py /home/lab /out/calibration/home-listing.json /out/calibration/home-files.txt' >/dev/null 2>&1 \
+  || problem "calibration run failed (out/calibration/); the config is seeded with the rig's 0700/0600 modes and R3 is nt where they decide it"
 
 if [ "$MODEL" = proxy ]; then
   docker run -d --rm --name "$PX" "${LBL[@]}" --network $NET --user "$(id -u):$(id -g)" \
@@ -132,13 +148,16 @@ docker run -d --name "$RUNC" "${LBL[@]}" --network "container:$NS" --cap-add SYS
   -e SSL_CERT_FILE=/run/ca/bundle.pem -e NODE_EXTRA_CA_CERTS=/run/ca/mitmproxy-ca-cert.pem -e REQUESTS_CA_BUNDLE=/run/ca/bundle.pem \
   -v "$CA/bundle.pem:/run/ca/bundle.pem:ro" -v "$CA/mitmproxy-ca-cert.pem:/run/ca/mitmproxy-ca-cert.pem:ro" \
   -v "$CA/bundle.pem:/etc/ssl/certs/ca-certificates.crt:ro" --tmpfs /run/cred:uid=1000,gid=1000,mode=0700,size=16m \
-  -v "$R/home:/run/init:ro" -v "$R/work:/work" -v "$R/out:/out" -v "$S/lib:/opt/bench:ro" -v "$L/lab:/opt/lab:ro" \
+  -v "$R/work:/work" -v "$R/out:/out" -v "$S/lib:/opt/bench:ro" -v "$L/lab:/opt/lab:ro" \
   -w /work "$IMAGE" sleep 86400 >/dev/null || { echo "harness container failed to start" >&2; exit 1; }
-docker exec "$RUNC" bash -c 'cp -a /run/init/. /home/lab/ 2>/dev/null; chmod 0755 /home/lab'   # cp -a copies the init dir mode; reset HOME to 0755
+# the staged config goes in with the harness's own modes from the calibration run, or 0700/0600 (out/home-seed.json); HOME stays 0755
+( set -o pipefail; tar -C "$R/home" -cf - . | docker exec -i "$RUNC" python3 /opt/bench/seed_home.py /home/lab /out/calibration/home-listing.json /out/home-seed.json ) \
+  || { echo "could not seed HOME with the adapter's config" >&2; exit 1; }   # a partial archive (tar failed) stops the unit
 CREDIN=/run/cred/$(basename "${CRED_SRC:-none}")   # the credential is piped in (read by you on the host, written by uid 1000), never bind-mounted
 if [ -n "$CRED_SRC" ]; then
   docker exec -i "$RUNC" sh -c "cat > $CREDIN" < "$CRED_SRC" \
     && docker exec "$RUNC" bash -c "mkdir -p \"\$(dirname /home/lab/$CRED_DEST)\" && cp $CREDIN /home/lab/$CRED_DEST && chmod 600 /home/lab/$CRED_DEST" \
+    && docker exec "$RUNC" python3 /opt/bench/seed_home.py --record /home/lab /out/home-seed.json "$CRED_DEST" \
     || { echo "could not copy the credential file into the container" >&2; exit 1; }
 fi
 IMAGE_ID=$(docker image inspect -f '{{.Id}}' "$IMAGE")
@@ -150,7 +169,7 @@ E = os.environ
 json.dump({"error_re":json.loads(os.environ["ERROR_RES"]),"rig":"agenticbench","batch":"${AB_BATCH:-}","harness":"$H","variant":"$V","steps":"${STEPS[*]}","version":"$VERSION","image":"$IMAGE",
  "image_id":"$IMAGE_ID","canary":"$CANARY","dummy_key":"$DUMMY","model":"$MODEL","upstream":"${MODEL_UPSTREAM:-}" if "$MODEL"=="proxy" else "",
  "model_id":E["RJ_MODEL_ID"],"proxy_ip":"$PXIP","ns_ip":"$NSIP","l3variant":"$L3VARIANT","flags":"$FLAGS",
- "mitm_block":E["RJ_BLOCK"],"mitm_stream":E["RJ_STREAM"],"mitm_nobody":r'''$NOBODY''',"model_re":E["RJ_MODEL_RE"],"cred_dest":"$CRED_DEST","cred_stores":"""${CRED_STORES:-}""".split(),"started":"$TS","home_mode":"0755 tmpfs",
+ "mitm_block":E["RJ_BLOCK"],"mitm_stream":E["RJ_STREAM"],"mitm_nobody":r'''$NOBODY''',"model_re":E["RJ_MODEL_RE"],"cred_dest":"$CRED_DEST","cred_stores":"""${CRED_STORES:-}""".split(),"started":"$TS","home_mode":"0755 tmpfs","home_seed":1,
  "env_names":[e.split("=")[0] for e in """${ENVS[*]:-}""".split() if "=" in e]},open(sys.argv[1],"w"),indent=1)
 EOF
 
