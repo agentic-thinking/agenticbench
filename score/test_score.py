@@ -113,8 +113,8 @@ class ScoreTests(unittest.TestCase):
     def test_conflict_of_interest_on_outputs(self):
         full = {"A1": ["pass", "e"], "A2": ["pass", "e"], "A3": ["pass", "e"], "B1": ["pass", "e"]}
         sc = score.score(TESTS, res(X={"version": "1", "results": full}))
-        self.assertIn("AgentProtect", score.render_svg(TESTS, sc))
-        self.assertIn("AgentProtect", score.render_html(TESTS, sc))
+        for out in (score.render_svg(TESTS, sc), score.render_html(TESTS, sc)):
+            self.assertIn("not for sale and never scored", out); self.assertIn("CHARTER.md", out); self.assertNotIn("AgentProtect", out)
 
     def test_not_tested_and_held_wording(self):
         """The two non-scored outcomes are labelled "Not tested by us" (our limitation) and "Held" (disclosure open)."""
@@ -177,7 +177,7 @@ class ScoreTests(unittest.TestCase):
         self.assertEqual(sc["X"]["results"]["A2"], ["fail", "e2"])
         self.assertEqual(sc["X"]["info"]["I1"], ["yes", "token in header"])
         ev = score.render_evidence_html(TESTS, sc)
-        self.assertIn("e&lt;1&gt;", ev); self.assertIn("token in header", ev); self.assertIn("AgentProtect", ev)
+        self.assertIn("e&lt;1&gt;", ev); self.assertIn("token in header", ev); self.assertIn("not for sale and never scored", ev)
 
     def test_real_files_valid(self):
         here = os.path.dirname(os.path.abspath(__file__))

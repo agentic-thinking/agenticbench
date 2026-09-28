@@ -41,7 +41,7 @@ import sys
 
 STATUSES = {"pass", "fail", "na", "nt", "pending"}
 COLOURS = {"L": "#0b1349", "C": "#0a869f", "N": "#0db896", "R": "#c9a227"}
-COI = "Run by Agentic Thinking Ltd, which sells AgentProtect (AI agent governance). Conflict of interest: see CHARTER.md."
+COI = "Run by Agentic Thinking Ltd, a research lab. Its own software is not for sale and never scored; no vendor money. See CHARTER.md."
 SHORT = {"L": "DATA SENT OUT", "C": "PRIVACY CONTROLS", "N": "UNATTENDED", "R": "AUDIT LOG"}
 # Words for the two non-scored outcomes, in the chart legend and sub-lines, the table and the evidence page.
 NOT_TESTED = "Not tested by us"

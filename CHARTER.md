@@ -1,16 +1,16 @@
 # AgenticBench governance charter
 
-Version 1, 26 Sep 2026. AgenticBench is run by Agentic Thinking Ltd, an independent research lab in the UK.
+Version 1, 26 Sep 2026; independence wording updated 28 Sep 2026. AgenticBench is run by Agentic Thinking Ltd, an independent research lab in the UK.
 
 ## 1. What the benchmark is for
 
 To tell users what an AI coding agent does on their machine, compared with what its vendor says: what leaves the machine and to whom, whether consent and opt-outs work, what happens with no human present, and whether the agent's own record is usable. It does not measure how well an agent codes.
 
-## 2. Conflict of interest, stated plainly
+## 2. Independence and conflict of interest
 
-Agentic Thinking owns AgentProtect, commercial software for governing AI agents (policy, approvals and audit records). AgentProtect is not a coding agent and competes with none of the agents tested. But a benchmark that finds gaps in agent records and approvals could be read as marketing for it. So:
+Agentic Thinking is a research lab. It has developed AI agent governance and workflow software, none of which is for sale, and we will never score our own software on AgenticBench. The benchmark takes no vendor money (section 4). A benchmark that finds gaps in agent records and approvals could still be read as favouring the lab's own approach to governing agents. So:
 
-- **Tamper evidence of the record is not scored.** It is the property AgentProtect sells, so scoring it would tilt results towards our product's pitch. It is shown as an informational row (I4) with its evidence.
+- **Tamper evidence of the record is not scored.** Because the lab has developed software in this space (governance of agent records and approvals), scoring it could tilt results towards the lab's own approach. It is reported as an informational row (I4) with its evidence.
 - Categories, tests and thresholds are published with their rationale before results, and every change is versioned (`score/tests.json`, `METHOD.md`).
 - The rig, scorer and test definitions are published so anyone can re-run the tests and check a result without trusting us; the captures behind published results are published with those results.
 - We seek at least one external reviewer for each version of the test definitions and name them when they agree to be named.

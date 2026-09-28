@@ -27,3 +27,4 @@ openhands uv     openhands                                                      
 pydanticai uv    clai+pydantic-ai-harness[coder]==0.36.0+pydantic-ai==2.51.0                                       2.51.0                  clai
 gemini   npm       @google/gemini-cli                                                                               0.61.0                  gemini
 cursor   targz     https://downloads.cursor.com/lab/2026.09.26-dd393fe/linux/x64/agent-cli-package.tar.gz          2026.09.26-dd393fe      cursor-agent 8085fd120f5c71f4eae7fea26a043718e5644e3071e4fab3220a0e58c51f9593
+copilot  npm       @github/copilot                                                                                  1.0.88                  copilot

@@ -19,7 +19,7 @@ A pass describes one measured run within the implemented procedure. Read [KNOWN-
 | `rig.conf.example` | Operator configuration: model provider, vendor-hosted harness settings, optional safety block |
 | `build.sh`, `docker/` | Builds every image (base, tools, mitm, one per harness; `docker/hermes/` for the one harness installed by a vendor script) and creates the lab CA |
 | `bench/unit.sh`, `bench/batch.sh`, `bench/stream_check.py` | One test unit; the full unit list of METHOD.md for one or more harnesses; the completeness check of streamed flows |
-| `bench/harnesses/`, `bench/test_adapters.py` | One adapter per harness (21: aider, amp, auggie, claude, cline, codex, cursor, dsh, gemini, goose, grok, hermes, kilo, kimi, openclaw, opencode, openhands, pi, pydanticai, qwen, zcode): headless command, opt-out switches, approval flags (see its README); and their offline self-test |
+| `bench/harnesses/`, `bench/test_adapters.py` | One adapter per harness (22: aider, amp, auggie, claude, cline, codex, copilot, cursor, dsh, gemini, goose, grok, hermes, kilo, kimi, openclaw, opencode, openhands, pi, pydanticai, qwen, zcode): headless command, opt-out switches, approval flags (see its README); and their offline self-test |
 | `bench/analyse_all.sh`, `bench/analyse_unit.py`, `bench/digest.py` | Mechanical facts from the captures |
 | `bench/adjudication.example.json`, `bench/adjudication_init.py` | Template and starter for the hand-checked inputs |
 | `bench/score_bench.py`, `bench/test_score_bench.py`, `bench/test_evidence_model.py` | Captures plus adjudication to per-test results (the input of `score/score.py`), and its tests |
